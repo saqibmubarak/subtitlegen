@@ -1,0 +1,30 @@
+# docker-compose.yml
+
+version: '3.8'
+
+services:
+  subtitler:
+    # Build the Docker image using the Dockerfile in the current directory.
+    build: .
+
+    # Mount local directories into the container.
+    # Replace the path on the left (`./videos`) with the actual path to your video files.
+    # The right side (`/data/videos`) is the path inside the container.
+    volumes:
+      - C:\Users\saqib\Videos\torrent\CodeWithMosh - React 18 for Beginners\CodeWithMosh - React 18 for Beginners:/data/videos
+      - ./config.ini:/app/config.ini
+
+    # This line enables GPU access for the container.
+    # The `gpus: all` directive makes it work with any available NVIDIA GPU.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Command to run the transcription.
+    # It points to the mounted video directory inside the container.
+    # You can change the path argument to a specific file or folder.
+    command: python main.py /data/videos
