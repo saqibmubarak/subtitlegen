@@ -1,6 +1,6 @@
 # 🎥 Subtitler CLI: Batch ASR Transcription Service (Whisper-Powered)
 
-This is a **Python command-line application** designed for efficient, batch-processed Automated Speech Recognition (ASR) transcription of video files using the **OpenAI Whisper model**. It is engineered for simplicity, speed (via GPU support), and robust configuration.
+This is a **Command-line application** designed for efficient, batch-processed Automated Speech Recognition (ASR) transcription of video files using the **LLM model**. It is engineered for simplicity, speed (via GPU support), and robust configuration.
 
 ## ✨ Features
 

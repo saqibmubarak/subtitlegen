@@ -1,52 +1,71 @@
 # transcriber.py
 
-import whisper
+from faster_whisper import WhisperModel
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Global cache to hold the loaded Whisper model
+# Global cache is crucial for multiprocessing performance
 _model_cache = {}
 
 
-def load_whisper_model(model_identifier: str, device: str):
+def load_whisper_model(model_identifier: str, device: str, compute_type: str):
     """
-    Loads and caches the Whisper model based on identifier and device.
+    Loads and caches the Faster Whisper model based on identifier, device, and compute type.
+    This runs only once per process, solving the repeated loading bottleneck.
+    """
+    cache_key = f"{model_identifier}-{device}-{compute_type}"
 
-    Requirement: Uses the LLM (Whisper).
-    """
-    if model_identifier not in _model_cache:
-        print(f"Loading Whisper model: {model_identifier} on device: {device}...")
-        # whisper.load_model handles downloading and setting up PyTorch device (cuda/cpu)
+    if cache_key not in _model_cache:
+        print(
+            f"Loading Faster Whisper model: {model_identifier} on device: {device} with compute type: {compute_type}...")
         try:
-            model = whisper.load_model(model_identifier, device=device)
-            _model_cache[model_identifier] = model
+            model = WhisperModel(
+                model_identifier,
+                device=device,
+                compute_type=compute_type
+            )
+            _model_cache[cache_key] = model
             print("Model loaded successfully.")
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load Whisper model '{model_identifier}' on device '{device}'. Check model name and PyTorch/CUDA setup.") from e
+                f"Failed to load Whisper model '{model_identifier}' on device '{device}'. Error: {e}") from e
 
-    return _model_cache[model_identifier]
+    return _model_cache[cache_key]
 
 
 def transcribe_video(
         video_path: Path,
         model_identifier: str,
         device: str,
-        language: Optional[str]
+        language: Optional[str],
+        compute_type: str
 ) -> Dict[str, Any]:
-    """Transcribes a single video file and returns the full result dictionary."""
+    """Transcribes a single video file and returns the result in the expected dictionary format."""
 
-    model = load_whisper_model(model_identifier, device)
+    model = load_whisper_model(model_identifier, device, compute_type)
 
     print(f"-> Starting transcription for: {video_path.name}")
 
-    # Transcribe the audio stream extracted from the video file
-    result = model.transcribe(
+    # 1. Perform Transcription
+    segments_generator, info = model.transcribe(
         str(video_path),
         language=language,
-        # Default options for segments should yield segments with timestamps
+        vad_filter=True
     )
 
-    print(f"-> Transcription complete. Detected language: {result.get('language', 'N/A')}")
+    # 2. Convert generator output to the list format expected by utils.py
+    segments = []
+    for segment in segments_generator:
+        segments.append({
+            'start': segment.start,
+            'end': segment.end,
+            'text': segment.text
+        })
 
-    return result
+    detected_language = info.language if info else "N/A"
+    print(f"-> Transcription complete. Detected language: {detected_language}")
+
+    return {
+        'segments': segments,
+        'language': detected_language
+    }

@@ -1,6 +1,7 @@
 # Core dependencies
 torch
-openai-whisper
+# openai-whisper
+faster-whisper
 ffmpeg-python # Dependency for whisper audio extraction
 # Optional: faster-whisper is recommended for better performance,
 # but the standard openai-whisper is used here for simplicity and PyTorch GPU integration.
