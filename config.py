@@ -1,5 +1,3 @@
-# config.py
-
 import configparser
 from typing import Dict, Any
 import multiprocessing

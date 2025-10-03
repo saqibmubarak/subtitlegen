@@ -1,5 +1,3 @@
-# main.py
-
 import argparse
 import sys
 from pathlib import Path
@@ -7,10 +5,10 @@ import torch
 import multiprocessing
 import os
 
-# Import project modules
 from config import load_config
 from transcriber import transcribe_video
 
+SRT_FILE_EXTENSIONS = (".srt", ".vtt")
 
 
 def format_timestamp(seconds: float) -> str:
@@ -40,9 +38,6 @@ def find_video_files(input_path: Path, extensions):
     elif input_path.is_dir():
         for ext in extensions: video_files.extend(input_path.rglob(f'*{ext}'))
     return [p.resolve() for p in video_files]
-
-
-# --- End Utility Placeholder ---
 
 
 # --- WORKER FUNCTION FOR MULTIPROCESSING ---
@@ -81,6 +76,10 @@ def process_single_file(file_data_and_config):
     except Exception as e:
         print(f"[Worker {os.getpid()}] ERROR: Failed to process {video_file.name}. Error: {e}")
         return False
+
+
+def subtitle_available(video_file):
+    return any(map(os.path.exists, map(Path(video_file).with_suffix, SRT_FILE_EXTENSIONS)))
 
 
 def main():
@@ -139,7 +138,7 @@ def main():
 
     # --- 3. Process Files (Parallelized) ---
 
-    tasks = [(video_file, config) for video_file in video_files]
+    tasks = [(video_file, config) for video_file in video_files if not subtitle_available(video_file)]
 
     if max_workers > 1 and config['device'] == 'cuda':
         # Use a Pool to manage worker processes for parallel GPU transcription

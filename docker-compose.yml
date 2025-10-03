@@ -7,8 +7,9 @@ services:
     # Replace the path on the left (`./videos`) with the actual path to your video files.
     # The right side (`/data/videos`) is the path inside the container.
     volumes:
-      - target_dir:/data/videos
+      - .:/data/videos
       - ./config.ini:/app/config.ini
+      - ./model_cache:/root/.cache/whisper
 
     # This line enables GPU access for the container.
     # The `gpus: all` directive makes it work with any available NVIDIA GPU.

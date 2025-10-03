@@ -1,5 +1,3 @@
-# transcriber.py
-
 from faster_whisper import WhisperModel
 from pathlib import Path
 from typing import Dict, Any, Optional
