@@ -28,6 +28,7 @@ The image uses one GPU, a persistent Hugging Face model cache, a resumable job c
 
 ```bash
 subtitlegen generate VIDEO_OR_DIRECTORY [--backend auto] [--overwrite]
+subtitlegen generate VIDEO --profile one-piece --arc Dressrosa
 subtitlegen validate SUBTITLE.srt
 subtitlegen benchmark VIDEO [--backend auto]
 ```

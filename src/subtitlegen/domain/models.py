@@ -26,6 +26,7 @@ class Cue:
     start: float
     end: float
     text: str
+    confidence: float | None = None
 
     def __post_init__(self) -> None:
         if self.start < 0:
@@ -34,6 +35,8 @@ class Cue:
             raise ValueError("cue end must not precede its start")
         if not self.text.strip():
             raise ValueError("cue text must not be empty")
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ValueError("cue confidence must be between 0 and 1")
 
     @property
     def duration(self) -> float:

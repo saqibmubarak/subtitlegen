@@ -16,3 +16,4 @@ model_cache/
 .subtitlegen-docker/
 *.generated.srt
 *.generated.ass
+*.subtitlegen.json

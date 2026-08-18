@@ -8,8 +8,9 @@ A phased plan for accurate dialogue subtitles, series-aware terminology, and tra
 2. [Sync fix](02-sync-fix.md)
 3. [Upgrade choices](03-upgrade-choices.md)
 4. [Delivery plan and final architecture](04-delivery-plan.md)
-5. [References](05-references.md)
-6. [Requirements traceability](requirements-traceability.md)
+5. [Series profiles](06-series-profiles.md)
+6. [References](05-references.md)
+7. [Requirements traceability](requirements-traceability.md)
 
 ## Target devices
 

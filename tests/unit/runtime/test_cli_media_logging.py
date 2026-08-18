@@ -72,17 +72,31 @@ def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
     duplicate.parent.mkdir()
     duplicate.touch()
     fake = FakeService()
-    monkeypatch.setattr(cli_module, "_service", lambda *_args: (fake, "fake"))
+    selected_profiles: list[Any] = []
+
+    def fake_service(*args: Any, **_kwargs: Any) -> tuple[FakeService, str]:
+        selected_profiles.append(args[3])
+        return fake, "fake"
+
+    monkeypatch.setattr(cli_module, "_service", fake_service)
     output_dir = tmp_path / "output"
     result = runner.invoke(
         app,
-        ["generate", str(tmp_path), "--output-dir", str(output_dir)],
+        [
+            "generate",
+            str(tmp_path),
+            "--output-dir",
+            str(output_dir),
+            "--profile",
+            "avatar",
+        ],
     )
     assert result.exit_code == 0
     assert fake.paths == sorted([video.resolve(), duplicate.resolve()])
     assert len(set(fake.outputs)) == 2
     assert output_dir / "folder with spaces" / "video.srt" in fake.outputs
     assert output_dir / "another folder" / "video.srt" in fake.outputs
+    assert selected_profiles[0].profile_id == "avatar"
 
 
 def test_cli_benchmark_outputs_json(monkeypatch: Any, tmp_path: Path) -> None:
@@ -90,7 +104,9 @@ def test_cli_benchmark_outputs_json(monkeypatch: Any, tmp_path: Path) -> None:
     media = tmp_path / "clip.wav"
     media.touch()
     fake = FakeService()
-    monkeypatch.setattr(cli_module, "_service", lambda *_args: (fake, "fake"))
+    monkeypatch.setattr(
+        cli_module, "_service", lambda *_args, **_kwargs: (fake, "fake")
+    )
     monkeypatch.setattr(cli_module, "media_duration", lambda _path: 10.0)
     result = runner.invoke(
         app,

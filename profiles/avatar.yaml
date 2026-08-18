@@ -1,0 +1,59 @@
+schema_version: 1
+profile_id: avatar
+title: Avatar
+language: en
+terms:
+  - canonical: Aang
+    aliases: [Ang]
+    category: character
+  - canonical: Katara
+    aliases: [Ketara]
+    category: character
+  - canonical: Sokka
+    aliases: [Saka]
+    category: character
+  - canonical: Zuko
+    aliases: [Zuko]
+    category: character
+  - canonical: Iroh
+    aliases: [Uncle Iro, Iro]
+    category: character
+  - canonical: Appa
+    aliases: [Apa]
+    category: character
+  - canonical: Momo
+    category: character
+  - canonical: Ba Sing Se
+    aliases: [Ba Sing Say, Basingse]
+    category: place
+  - canonical: Omashu
+    aliases: [Oma Shu]
+    category: place
+  - canonical: Southern Water Tribe
+    category: place
+  - canonical: Fire Nation
+    category: place
+  - canonical: Air Nomad
+    category: place
+  - canonical: Air Nomads
+    category: place
+  - canonical: airbender
+    aliases: [air bender]
+    category: term
+  - canonical: airbending
+    aliases: [air bending]
+    category: term
+  - canonical: waterbending
+    aliases: [water bending]
+    category: term
+  - canonical: earthbending
+    aliases: [earth bending]
+    category: term
+  - canonical: firebending
+    aliases: [fire bending]
+    category: term
+  - canonical: Avatar State
+    category: term
+  - canonical: Agni Kai
+    aliases: [Agni-Kai]
+    category: term

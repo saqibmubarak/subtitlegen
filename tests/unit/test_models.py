@@ -23,6 +23,8 @@ def test_cue_exposes_duration_and_validates() -> None:
         Cue(-1, 1, "bad")
     with pytest.raises(ValueError):
         Cue(2, 1, "bad")
+    with pytest.raises(ValueError):
+        Cue(0, 1, "bad", confidence=2)
 
 
 def test_transcription_requires_ordered_words_and_language() -> None:

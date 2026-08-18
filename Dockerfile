@@ -14,6 +14,7 @@ COPY src ./src
 RUN python -m pip install --no-cache-dir .
 
 COPY config.ini ./
+COPY profiles ./profiles
 
 ENTRYPOINT ["subtitlegen"]
 CMD ["generate", "/data/videos", "--cache-dir", "/cache"]

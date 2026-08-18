@@ -1,0 +1,38 @@
+sample: "Dressrosa episode 1, source-relative 00:10:00–00:12:00"
+terms:
+  - timestamp: 00:00:46
+    expected: Dracule Mihawk
+    baseline: Dracule Mihawk
+    profiled: Dracule Mihawk
+  - timestamp: 00:00:53
+    expected: Dressrosa
+    baseline: Dressrosa
+    profiled: Dressrosa
+  - timestamp: 00:00:57
+    expected: Doflamingo
+    baseline: Don Quixote do Flamingo
+    profiled: Doflamingo
+  - timestamp: 00:01:01
+    expected: Bartholomew Kuma
+    baseline: Bartholomew Kuma
+    profiled: Bartholomew Kuma
+  - timestamp: 00:01:08
+    expected: Boa Hancock
+    baseline: Boa Hancock
+    profiled: Boa Hancock
+  - timestamp: 00:01:19
+    expected: Trafalgar Law
+    baseline: Trafalgar Law
+    profiled: Trafalgar Law
+  - timestamp: 00:01:28
+    expected: Roger
+    baseline: Raja
+    profiled: Roger
+  - timestamp: 00:01:34
+    expected: Buggy
+    baseline: Bucky
+    profiled: Buggy
+  - timestamp: 00:01:47
+    expected: Doflamingo
+    baseline: Doflamingo
+    profiled: Doflamingo

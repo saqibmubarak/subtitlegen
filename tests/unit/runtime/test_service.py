@@ -1,7 +1,9 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from subtitlegen.asr.context import AsrContext
 from subtitlegen.cues.builder import CueBuilder
 from subtitlegen.domain.models import Transcription, Word
 from subtitlegen.export.srt import SrtWriter
@@ -13,9 +15,17 @@ from subtitlegen.runtime.service import RuntimeResult, RuntimeService
 class FakeBackend:
     def __init__(self) -> None:
         self.calls = 0
+        self.contexts: list[AsrContext | None] = []
 
-    def transcribe(self, _media_path: Path, *, language: str | None = None) -> Transcription:
+    def transcribe(
+        self,
+        _media_path: Path,
+        *,
+        language: str | None = None,
+        **_kwargs: Any,
+    ) -> Transcription:
         self.calls += 1
+        self.contexts.append(_kwargs.get("context"))
         return Transcription(
             (Word(0, 1, "Hello"), Word(1, 2, " world.")),
             language or "en",
@@ -28,6 +38,7 @@ def _service(
     backend: FakeBackend,
     *,
     output_key: str = "srt-v1",
+    context: AsrContext | None = None,
 ) -> RuntimeService:
     store = PortableJobStore(tmp_path / "jobs")
     return RuntimeService(
@@ -38,6 +49,7 @@ def _service(
         StageExecutor(store),
         asr_key="fake-v1",
         output_key=output_key,
+        context=context,
     )
 
 
@@ -64,12 +76,20 @@ def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:
 
     skipped = service.process(media, output, language="en")
     assert skipped.status == "skipped"
-    assert skipped.job_id is None
+    assert skipped.job_id is not None
 
-    output.unlink()
     changed_rules = _service(tmp_path, backend, output_key="srt-v2")
     assert changed_rules.process(media, output).status == "resumed"
     assert backend.calls == 1
+
+
+def test_service_injects_asr_context(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.write_bytes(b"media")
+    backend = FakeBackend()
+    context = AsrContext(prompt="Aang", hotwords=("Aang",))
+    _service(tmp_path, backend, context=context).process(media, tmp_path / "output.srt")
+    assert backend.contexts == [context]
 
 
 def test_service_rejects_invalid_run_key(tmp_path: Path) -> None:

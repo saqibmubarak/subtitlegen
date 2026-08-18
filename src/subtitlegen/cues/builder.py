@@ -65,13 +65,29 @@ class CueBuilder:
 
     def _to_cue(self, words: list[Word]) -> Cue:
         start = words[0].start
-        return Cue(start=start, end=words[-1].end, text=self._join(words))
+        probabilities = [
+            word.probability for word in words if word.probability is not None
+        ]
+        return Cue(
+            start=start,
+            end=words[-1].end,
+            text=self._join(words),
+            confidence=min(probabilities) if probabilities else None,
+        )
 
     @staticmethod
     def _remove_overlaps(cues: list[Cue]) -> list[Cue]:
         normalized: list[Cue] = []
         for cue in cues:
             start = max(cue.start, normalized[-1].end if normalized else 0.0)
-            end = max(start, cue.end)
-            normalized.append(Cue(start=start, end=end, text=cue.text))
+            if cue.end <= start:
+                continue
+            normalized.append(
+                Cue(
+                    start=start,
+                    end=cue.end,
+                    text=cue.text,
+                    confidence=cue.confidence,
+                )
+            )
         return normalized

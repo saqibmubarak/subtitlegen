@@ -14,6 +14,15 @@ from subtitlegen.cues.builder import CueBuilder
 from subtitlegen.export.srt import SrtWriter
 from subtitlegen.logging import configure_logging
 from subtitlegen.media import discover_media, media_duration
+from subtitlegen.profiles.correction import (
+    ConfidenceGatedCorrector,
+    ConservativeLocalCorrector,
+)
+from subtitlegen.profiles.cue_processor import ProfileCueProcessor
+from subtitlegen.profiles.models import SeriesProfile
+from subtitlegen.profiles.normalizer import GlossaryNormalizer
+from subtitlegen.profiles.repository import ProfileRepository
+from subtitlegen.profiles.selector import ContextSelector
 from subtitlegen.runtime.capabilities import DeviceCapabilities
 from subtitlegen.runtime.executor import GpuResourceToken, StageExecutor
 from subtitlegen.runtime.factory import BackendFactory
@@ -30,11 +39,32 @@ def _service(
     settings: AppSettings,
     backend_name: str,
     cache_dir: Path,
+    profile: SeriesProfile | None = None,
+    *,
+    arc: str | None = None,
+    episode: str | None = None,
+    local_correction: bool = False,
 ) -> tuple[RuntimeService, str]:
     capabilities = DeviceCapabilities.detect()
     factory = BackendFactory(capabilities)
     selected = factory.select(backend_name)
     backend = factory.create(selected, settings.asr)
+    context = (
+        ContextSelector().select(profile, arc=arc, episode=episode)
+        if profile is not None
+        else None
+    )
+    normalizer = GlossaryNormalizer()
+    gated_corrector = (
+        ConfidenceGatedCorrector(normalizer, ConservativeLocalCorrector())
+        if profile is not None and local_correction
+        else None
+    )
+    cue_processor = (
+        ProfileCueProcessor(profile, normalizer, gated_corrector)
+        if profile is not None
+        else None
+    )
     asr_data = (
         selected,
         settings.asr.model,
@@ -43,10 +73,13 @@ def _service(
         settings.asr.language,
         settings.asr.beam_size,
         settings.asr.vad,
+        context,
     )
     asr_hash = hashlib.sha256(repr(asr_data).encode()).hexdigest()[:12]
     asr_key = f"{selected}-{asr_hash}"
-    output_hash = hashlib.sha256(repr((asr_key, settings.cues)).encode()).hexdigest()[:12]
+    output_hash = hashlib.sha256(
+        repr((asr_key, settings.cues, profile, local_correction)).encode()
+    ).hexdigest()[:12]
     output_key = f"srt-{output_hash}"
     store = PortableJobStore(cache_dir / "jobs")
     executor = StageExecutor(store, GpuResourceToken())
@@ -59,6 +92,8 @@ def _service(
             executor,
             asr_key=asr_key,
             output_key=output_key,
+            context=context,
+            cue_processor=cue_processor,
         ),
         selected,
     )
@@ -71,13 +106,34 @@ def generate(
     backend: Annotated[str, typer.Option("--backend")] = "auto",
     output_dir: Annotated[Path | None, typer.Option("--output-dir")] = None,
     cache_dir: Annotated[Path, typer.Option("--cache-dir")] = Path(".subtitlegen"),
+    profile: Annotated[str | None, typer.Option("--profile")] = None,
+    profiles_dir: Annotated[Path | None, typer.Option("--profiles-dir")] = None,
+    arc: Annotated[str | None, typer.Option("--arc")] = None,
+    episode: Annotated[str | None, typer.Option("--episode")] = None,
+    local_correction: Annotated[bool, typer.Option("--local-correction")] = False,
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
     """Generate SRT files recursively, resuming valid cached stages."""
     configure_logging(verbose)
     settings = SettingsLoader().load(config)
-    service, selected = _service(settings, backend, cache_dir)
+    series_profile = None
+    if profile:
+        profile_repository = (
+            ProfileRepository(profiles_dir)
+            if profiles_dir is not None
+            else ProfileRepository.default()
+        )
+        series_profile = profile_repository.load(profile)
+    service, selected = _service(
+        settings,
+        backend,
+        cache_dir,
+        series_profile,
+        arc=arc,
+        episode=episode,
+        local_correction=local_correction,
+    )
     videos = discover_media(input_path, settings.video_extensions)
     if not videos:
         raise typer.BadParameter("no supported media files were found")
@@ -124,10 +180,31 @@ def benchmark(
     config: Annotated[Path, typer.Option("--config")] = Path("config.ini"),
     backend: Annotated[str, typer.Option("--backend")] = "auto",
     cache_dir: Annotated[Path, typer.Option("--cache-dir")] = Path(".subtitlegen"),
+    profile: Annotated[str | None, typer.Option("--profile")] = None,
+    profiles_dir: Annotated[Path | None, typer.Option("--profiles-dir")] = None,
+    arc: Annotated[str | None, typer.Option("--arc")] = None,
+    episode: Annotated[str | None, typer.Option("--episode")] = None,
+    local_correction: Annotated[bool, typer.Option("--local-correction")] = False,
 ) -> None:
     """Measure one media file using the selected local backend."""
     settings = SettingsLoader().load(config)
-    service, selected = _service(settings, backend, cache_dir)
+    series_profile = None
+    if profile:
+        profile_repository = (
+            ProfileRepository(profiles_dir)
+            if profiles_dir is not None
+            else ProfileRepository.default()
+        )
+        series_profile = profile_repository.load(profile)
+    service, selected = _service(
+        settings,
+        backend,
+        cache_dir,
+        series_profile,
+        arc=arc,
+        episode=episode,
+        local_correction=local_correction,
+    )
     output = cache_dir / "benchmarks" / f"{media_path.stem}-{selected}.srt"
     started = time.perf_counter()
     result = service.process(

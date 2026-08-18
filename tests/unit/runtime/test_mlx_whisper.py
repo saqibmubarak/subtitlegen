@@ -1,8 +1,10 @@
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
+from subtitlegen.asr.context import AsrContext
 from subtitlegen.asr.mlx_whisper import MlxWhisperBackend
 from subtitlegen.settings import AsrSettings
 
@@ -29,13 +31,15 @@ def test_mlx_backend_normalizes_word_timestamps(tmp_path: Path) -> None:
     backend = MlxWhisperBackend(
         AsrSettings(model="large-v3-turbo"),
         transcribe_fn=transcribe,
-        audio_loader=lambda _path: [0.0],
+        audio_loader=lambda _path: np.zeros(6_400, dtype=np.float32),
     )
-    result = backend.transcribe(media)
+    result = backend.transcribe(media, context=AsrContext(prompt="Luffy"))
 
     assert result.words[0].text == " Hi"
     assert result.duration == 0.4
     assert calls[0]["word_timestamps"] is True
+    assert calls[0]["initial_prompt"] == "Luffy"
+    assert calls[0]["condition_on_previous_text"] is True
     assert calls[0]["path_or_hf_repo"] == "mlx-community/whisper-large-v3-turbo"
 
 
@@ -45,3 +49,26 @@ def test_mlx_backend_validates_media_and_maps_model_names(tmp_path: Path) -> Non
         backend.transcribe(tmp_path / "missing.wav")
     assert MlxWhisperBackend._model_repository("org/model") == "org/model"
     assert MlxWhisperBackend._model_repository("tiny") == "mlx-community/whisper-tiny-mlx"
+
+
+def test_mlx_backend_retains_context_across_windows(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    calls: list[dict[str, Any]] = []
+
+    def transcribe(_audio: Any, **kwargs: Any) -> dict[str, Any]:
+        calls.append(kwargs)
+        return {
+            "language": "en",
+            "segments": [{"words": [{"start": 0, "end": 1, "word": " Luffy"}]}],
+        }
+
+    backend = MlxWhisperBackend(
+        AsrSettings(),
+        transcribe_fn=transcribe,
+        audio_loader=lambda _path: np.zeros(31 * 16_000, dtype=np.float32),
+    )
+    result = backend.transcribe(media, context=AsrContext(prompt="Luffy"))
+    assert calls[0]["initial_prompt"] == "Luffy"
+    assert calls[0]["condition_on_previous_text"] is True
+    assert [word.start for word in result.words] == [0]

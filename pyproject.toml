@@ -29,6 +29,7 @@ dev = [
   "pytest>=8,<9",
   "pytest-cov>=6,<7",
   "ruff>=0.12,<1",
+  "types-PyYAML==6.0.12.20260815",
 ]
 
 [project.scripts]
@@ -36,6 +37,9 @@ subtitlegen = "subtitlegen.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.data-files]
+"share/subtitlegen/profiles" = ["profiles/*.yaml"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"

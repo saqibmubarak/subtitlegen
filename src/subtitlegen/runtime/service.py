@@ -4,12 +4,14 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 from subtitlegen.asr.base import AsrBackend
-from subtitlegen.domain.models import Transcription, Word
+from subtitlegen.asr.context import AsrContext
+from subtitlegen.domain.models import Cue, Transcription, Word
 from subtitlegen.pipeline import CueAssembler, SubtitleWriter
 from subtitlegen.runtime.executor import StageExecutor
 from subtitlegen.runtime.jobs import PortableJobStore
@@ -23,6 +25,11 @@ class RuntimeResult:
     job_id: str | None
 
 
+class CueProcessor(Protocol):
+    def process(self, cues: Iterable[Cue]) -> list[Cue]:
+        """Apply deterministic text processing without changing cue timing."""
+
+
 class RuntimeService:
     def __init__(
         self,
@@ -34,6 +41,8 @@ class RuntimeService:
         *,
         asr_key: str,
         output_key: str,
+        context: AsrContext | None = None,
+        cue_processor: CueProcessor | None = None,
     ) -> None:
         self._validate_key(asr_key)
         self._validate_key(output_key)
@@ -44,6 +53,8 @@ class RuntimeService:
         self._executor = executor
         self._asr_key = asr_key
         self._output_key = output_key
+        self._context = context
+        self._cue_processor = cue_processor
 
     def process(
         self,
@@ -54,14 +65,21 @@ class RuntimeService:
         overwrite: bool = False,
         refresh_stages: bool = False,
     ) -> RuntimeResult:
-        if is_valid_srt(output_path) and not overwrite:
-            return RuntimeResult("skipped", output_path, None)
-
         manifest = self._store.create(media_path)
+        if (
+            is_valid_srt(output_path)
+            and not overwrite
+            and self._is_current_output(output_path, manifest.source_sha256)
+        ):
+            return RuntimeResult("skipped", output_path, manifest.job_id)
         initial_transcription = manifest.stage(f"transcribe-{self._asr_key}")
 
         def transcribe(job_directory: Path) -> Path:
-            result = self._backend.transcribe(media_path, language=language)
+            result = self._backend.transcribe(
+                media_path,
+                language=language,
+                context=self._context,
+            )
             artifact = job_directory / self._asr_key / "words.json"
             artifact.parent.mkdir(parents=True, exist_ok=True)
             self._atomic_text(artifact, self._encode_transcription(result))
@@ -78,6 +96,8 @@ class RuntimeService:
         def build_subtitle(job_directory: Path) -> Path:
             transcription = self._decode_transcription(words_path)
             cues = self._cue_builder.build(transcription.words)
+            if self._cue_processor is not None:
+                cues = self._cue_processor.process(cues)
             artifact = job_directory / self._output_key / "subtitle.srt"
             artifact.parent.mkdir(parents=True, exist_ok=True)
             temporary = self._temporary_path(artifact.parent, ".srt.tmp")
@@ -96,6 +116,7 @@ class RuntimeService:
             force=refresh_stages,
         )
         self._atomic_copy(subtitle_path, output_path)
+        self._write_output_metadata(output_path, manifest.source_sha256)
         status: Literal["generated", "resumed"] = (
             "resumed"
             if not refresh_stages
@@ -104,6 +125,36 @@ class RuntimeService:
             else "generated"
         )
         return RuntimeResult(status, output_path, manifest.job_id)
+
+    def _is_current_output(self, output_path: Path, source_sha256: str) -> bool:
+        try:
+            data = json.loads(self._metadata_path(output_path).read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return bool(
+            data.get("schema_version") == 1
+            and data.get("source_sha256") == source_sha256
+            and data.get("output_key") == self._output_key
+        )
+
+    def _write_output_metadata(self, output_path: Path, source_sha256: str) -> None:
+        self._atomic_text(
+            self._metadata_path(output_path),
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source_sha256": source_sha256,
+                    "output_key": self._output_key,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+
+    @staticmethod
+    def _metadata_path(output_path: Path) -> Path:
+        return output_path.with_suffix(f"{output_path.suffix}.subtitlegen.json")
 
     @staticmethod
     def _validate_key(value: str) -> None:

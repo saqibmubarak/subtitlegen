@@ -1,0 +1,12 @@
+- profile: avatar
+  input: "Ang reached Basingse with Uncle Iro."
+  expected: "Aang reached Ba Sing Se with Iroh."
+- profile: avatar
+  input: "She is an air bender learning water bending."
+  expected: "She is an airbender learning waterbending."
+- profile: one-piece
+  input: "Zolo landed in Dress Rosa."
+  expected: "Zoro landed in Dressrosa."
+- profile: one-piece
+  input: "They played hockey under the sunny sky."
+  expected: "They played hockey under the sunny sky."

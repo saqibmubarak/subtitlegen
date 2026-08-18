@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from subtitlegen.asr.context import AsrContext
 from subtitlegen.asr.faster_whisper import FasterWhisperBackend
 from subtitlegen.settings import AsrSettings
 
@@ -35,13 +36,18 @@ def test_backend_normalizes_words_and_passes_sync_options(tmp_path: Path) -> Non
         AsrSettings(model="tiny", device="cpu", compute_type="int8"),
         model_factory=factory,
     )
-    result = backend.transcribe(media)
+    result = backend.transcribe(
+        media,
+        context=AsrContext(prompt="Aang", hotwords=("Aang", "airbender")),
+    )
 
     assert [word.text for word in result.words] == [" Hello", " world."]
     assert factory_calls == [{"device": "cpu", "compute_type": "int8"}]
     call = fake.calls[0]
     assert call["word_timestamps"] is True
     assert call["condition_on_previous_text"] is False
+    assert call["initial_prompt"] == "Aang"
+    assert call["hotwords"] == "Aang airbender"
     assert call["vad_parameters"]["min_silence_duration_ms"] == 500
 
 

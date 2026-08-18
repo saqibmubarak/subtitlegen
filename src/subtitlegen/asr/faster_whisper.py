@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from subtitlegen.asr.context import AsrContext
 from subtitlegen.domain.models import Transcription, Word
 from subtitlegen.settings import AsrSettings
 
@@ -23,7 +24,13 @@ class FasterWhisperBackend:
         self._model_factory = model_factory
         self._model: Any | None = None
 
-    def transcribe(self, media_path: Path, *, language: str | None = None) -> Transcription:
+    def transcribe(
+        self,
+        media_path: Path,
+        *,
+        language: str | None = None,
+        context: AsrContext | None = None,
+    ) -> Transcription:
         if not media_path.exists():
             raise FileNotFoundError(media_path)
         model = self._load_model()
@@ -40,6 +47,8 @@ class FasterWhisperBackend:
             word_timestamps=True,
             condition_on_previous_text=False,
             hallucination_silence_threshold=2.0,
+            initial_prompt=context.prompt if context is not None else None,
+            hotwords=" ".join(context.hotwords) if context is not None else None,
         )
 
         words: list[Word] = []

@@ -39,9 +39,24 @@ def test_builder_normalizes_overlapping_word_ranges() -> None:
     assert cues[1].end >= cues[1].start
 
 
+def test_builder_drops_cues_fully_covered_by_previous_timing() -> None:
+    cues = CueBuilder().build([Word(0, 3, "one."), Word(1, 2, "duplicate.")])
+    assert [cue.text for cue in cues] == ["one."]
+
+
 def test_builder_drops_a_single_oversized_hallucinated_word() -> None:
     cues = CueBuilder(CueRules(max_duration_seconds=6)).build([Word(0, 9, "drawn-out")])
     assert cues == []
+
+
+def test_builder_uses_lowest_word_confidence_for_correction_gate() -> None:
+    cue = CueBuilder().build(
+        [
+            Word(0, 1, "Clear", probability=0.99),
+            Word(1, 2, " Bugy.", probability=0.2),
+        ]
+    )[0]
+    assert cue.confidence == 0.2
 
 
 @given(

@@ -8,7 +8,7 @@
 | One GPU model by default | typed settings, backend instance lifecycle | settings/backend tests |
 | Recursive input and skip support | Typer CLI and `RuntimeService` | CLI/service tests |
 | Windows Docker and Mac native | Docker CUDA profile and MLX adapter | [Phase 1 Mac evidence](benchmarks/phase-1-mac.md), Compose validation |
-| Series terminology | Phase 2 profiles | Phase 2 proper-noun benchmark |
+| Series terminology | Versioned profiles, scoped context, safe normalization | [Phase 2 context evidence](benchmarks/phase-2-context.md), terminology fixture |
 | Interchangeable ASR | Phase 3 backend contracts | Phase 3 adapter suite |
 | Japanese on-screen translation | Phase 4 visual pipeline | Dressrosa annotations and ASS tests |
 | Resumable intermediates | `PortableJobStore`, `StageExecutor` | job/executor/service tests |

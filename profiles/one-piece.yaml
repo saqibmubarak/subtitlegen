@@ -1,0 +1,85 @@
+schema_version: 1
+profile_id: one-piece
+title: One Piece
+language: en
+terms:
+  - canonical: Luffy
+    aliases: [Monkey D Luffy, Monkey D. Luffy]
+    category: character
+  - canonical: Zoro
+    aliases: [Roronoa Zoro, Zolo]
+    category: character
+  - canonical: Nami
+    category: character
+  - canonical: Usopp
+    aliases: [Ussop]
+    category: character
+  - canonical: Sanji
+    category: character
+  - canonical: Chopper
+    aliases: [Tony Tony Chopper]
+    category: character
+  - canonical: Robin
+    aliases: [Nico Robin]
+    category: character
+  - canonical: Franky
+    category: character
+  - canonical: Brook
+    category: character
+  - canonical: Law
+    aliases: [Trafalgar Law]
+    category: character
+    arcs: [Dressrosa]
+    normalize_aliases: false
+    normalize_canonical: false
+  - canonical: Doflamingo
+    aliases:
+      - Donquixote Doflamingo
+      - Don Quixote do Flamingo
+      - Don Quixote do Thomingo
+      - Doffy
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Dracule Mihawk
+    category: character
+  - canonical: Bartholomew Kuma
+    category: character
+  - canonical: Boa Hancock
+    category: character
+  - canonical: Buggy
+    aliases: [Bucky]
+    category: character
+  - canonical: Gol D. Roger
+    aliases: [Raja]
+    category: character
+  - canonical: Dressrosa
+    aliases: [Dress Rosa]
+    category: place
+    arcs: [Dressrosa]
+  - canonical: Straw Hat Pirates
+    aliases: [Straw Hats]
+    category: term
+  - canonical: Thousand Sunny
+    aliases: [Sunny]
+    category: place
+    normalize_aliases: false
+    normalize_canonical: false
+  - canonical: Grand Line
+    category: place
+  - canonical: New World
+    category: place
+  - canonical: Marines
+    aliases: [Marine]
+    category: term
+    normalize_aliases: false
+  - canonical: Haki
+    aliases: [Hockey]
+    category: term
+    normalize_aliases: false
+  - canonical: Devil Fruit
+    aliases: [Devil's Fruit]
+    category: term
+  - canonical: Gear Fourth
+    aliases: [Gear 4]
+    category: term
+    arcs: [Dressrosa]

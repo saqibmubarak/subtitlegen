@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from subtitlegen.asr.context import AsrContext
 from subtitlegen.domain.models import Transcription, Word
 from subtitlegen.media import load_audio_mono
 from subtitlegen.settings import AsrSettings
@@ -26,7 +27,13 @@ class MlxWhisperBackend:
         self._transcribe_fn = transcribe_fn
         self._audio_loader = audio_loader
 
-    def transcribe(self, media_path: Path, *, language: str | None = None) -> Transcription:
+    def transcribe(
+        self,
+        media_path: Path,
+        *,
+        language: str | None = None,
+        context: AsrContext | None = None,
+    ) -> Transcription:
         if not media_path.exists():
             raise FileNotFoundError(media_path)
         transcribe = self._transcribe_fn
@@ -39,12 +46,15 @@ class MlxWhisperBackend:
                 ) from error
             transcribe = mlx_whisper.transcribe
 
+        audio = self._audio_loader(media_path)
+        sample_rate = 16_000
         result = transcribe(
-            self._audio_loader(media_path),
+            audio,
             path_or_hf_repo=self._model_repository(self._settings.model),
             language=language if language is not None else self._settings.language,
             word_timestamps=True,
-            condition_on_previous_text=False,
+            condition_on_previous_text=context is not None,
+            initial_prompt=context.prompt if context is not None else None,
         )
         words: list[Word] = []
         for segment in result.get("segments", []):
@@ -63,7 +73,7 @@ class MlxWhisperBackend:
                     )
                 )
         words.sort(key=lambda word: (word.start, word.end))
-        duration = max((word.end for word in words), default=0.0)
+        duration = len(audio) / sample_rate
         return Transcription(
             words=tuple(words),
             language=str(result.get("language") or language or "unknown"),
