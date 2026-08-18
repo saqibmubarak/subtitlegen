@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subtitlegen"
+version = "0.1.0"
+description = "Cross-platform, extensible video subtitle generation pipeline"
+readme = "ReadMe.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "av>=13",
+  "faster-whisper>=1.2,<2",
+  "PyYAML>=6,<7",
+  "typer>=0.16,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "hypothesis>=6,<7",
+  "mypy>=1.17,<2",
+  "pytest>=8,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.12,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "integration: tests that cross module boundaries",
+  "model: tests that load local ML models",
+  "benchmark: quality or performance benchmarks",
+  "gpu: tests requiring an NVIDIA GPU",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["subtitlegen"]
+
+[[tool.mypy.overrides]]
+module = ["ctranslate2", "faster_whisper"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["subtitlegen"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85

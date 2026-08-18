@@ -1,7 +1,5 @@
-# Core dependencies
-torch
-# openai-whisper
-faster-whisper
-ffmpeg-python # Dependency for whisper audio extraction
-# Optional: faster-whisper is recommended for better performance,
-# but the standard openai-whisper is used here for simplicity and PyTorch GPU integration.
+# Legacy pip entry point. The canonical dependency definitions are in pyproject.toml.
+av>=13
+faster-whisper>=1.2,<2
+PyYAML>=6,<7
+typer>=0.16,<1
