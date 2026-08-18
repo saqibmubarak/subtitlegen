@@ -28,7 +28,7 @@ class VisualEventTracker:
     def __init__(
         self,
         *,
-        max_gap_seconds: float = 1.25,
+        max_gap_seconds: float = 1.5,
         frame_interval_seconds: float = 2 / 3,
         min_observations: int = 2,
         box_iou_threshold: float = 0.25,

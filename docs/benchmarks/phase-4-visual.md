@@ -51,15 +51,20 @@ vertical-position policy. Before that policy, Manga OCR converted arena texture
 and motion lines into 38 persistent false events; this failure is retained here
 to make the precision trade-off explicit.
 
-The cold six-second scene-card run took 21.69 seconds, including Paddle,
-Manga OCR, and NLLB model loading. The 85-second negative-window run took
-42.27 seconds with Paddle and Manga OCR cold loading and no translation model
-load. These window timings are diagnostic and are not extrapolated to a full
-episode because scene density and OCR candidate count dominate runtime.
+The pre-proposal baseline took 21.69 seconds for the cold six-second scene-card
+run. Its 85-second negative-window run took 42.27 seconds with Paddle and Manga
+OCR cold loading and no translation model load. These window timings are
+diagnostic and are not extrapolated to a full episode because scene density and
+OCR candidate count dominate runtime.
 
-The complete two-test model gate took 61.38 seconds wall time under
-`/usr/bin/time -l`, with maximum resident set size 4.83 GB. This is unified
-process memory on macOS, not CUDA VRAM.
+After adding temporal frame-difference proposals, fixed-size region batching,
+static-region detector reuse, and the high-value filter, the six-second
+scene-card case took 19.78 seconds versus the 21.69-second pre-proposal
+baseline. The final clean
+pinned-dependency two-test process took 79.44 seconds with maximum resident set
+size 4.51 GB; an earlier run completed in 55.91 seconds, so the combined cold
+gate is too variable to use as the optimization claim. This is unified process
+memory on macOS, not CUDA VRAM.
 
 ## Interpretation
 

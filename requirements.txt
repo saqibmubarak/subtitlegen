@@ -3,6 +3,6 @@ av==17.0.1
 ctranslate2==4.7.2
 filelock==3.29.0
 faster-whisper==1.2.1
-numpy==1.26.4
+numpy==2.2.6
 PyYAML==6.0.2
 typer==0.25.1

@@ -89,6 +89,23 @@ def test_paddle_detector_and_fallback_contract() -> None:
     assert fallback.detect(np.zeros((10, 10, 3))) == result
     fallback.close()
 
+    class PartialBatchDetector:
+        def detect(self, _image: Any) -> tuple[BoundingBox, ...]:
+            return ()
+
+        def detect_batch(
+            self,
+            _images: Any,
+        ) -> tuple[tuple[BoundingBox, ...], ...]:
+            return ((BoundingBox(1, 1, 2, 2),), ())
+
+    batched_fallback = FallbackTextDetector(PartialBatchDetector(), batch_detector)
+    batched = batched_fallback.detect_batch(
+        [np.zeros((10, 10)), np.zeros((10, 10))]
+    )
+    assert batched[0] == (BoundingBox(1, 1, 2, 2),)
+    assert batched[1] == (BoundingBox(2, 3, 7, 7, 0.8),)
+
 
 @pytest.mark.parametrize(
     "detector",

@@ -38,3 +38,7 @@ subtitlegen benchmark VIDEO [--backend auto]
 Configuration defaults are in `config.ini`. First use may download a model; cached runs can operate offline.
 See [ASR backends and presets](docs/07-asr-backends.md) for optional CUDA adapters.
 See [Japanese visual text](docs/08-visual-text.md) for local OCR, translation, and ASS output.
+For clean Mac/Windows setup and the RTX acceptance runner, see
+[platform setup](docs/09-platform-setup.md). Review the
+[model/license manifest](docs/10-model-licenses.md), especially NLLB's
+non-commercial restriction, before deployment.

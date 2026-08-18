@@ -13,6 +13,7 @@ from subtitlegen.visual.detection import PaddleOcrDetector
 from subtitlegen.visual.models import BoundingBox
 from subtitlegen.visual.ocr import MangaOcrEngine
 from subtitlegen.visual.pipeline import VisualTextPipeline
+from subtitlegen.visual.proposals import TemporalDifferenceProposer
 from subtitlegen.visual.sampler import FrameSampler
 from subtitlegen.visual.tracker import VisualEventTracker
 from subtitlegen.visual.translation import NllbLocalTranslator
@@ -91,6 +92,7 @@ def test_dressrosa_scene_card_end_to_end() -> None:
         MangaOcrEngine(),
         NllbLocalTranslator(profile=profile),
         VisualEventTracker(),
+        region_proposer=TemporalDifferenceProposer(),
     )
 
     try:
@@ -161,6 +163,7 @@ def test_dressrosa_annotated_card_quality_by_category() -> None:
         ocr,
         translator,
         VisualEventTracker(frame_interval_seconds=0.5),
+        region_proposer=TemporalDifferenceProposer(),
     )
     try:
         assert negative_pipeline.process(SAMPLE) == ()

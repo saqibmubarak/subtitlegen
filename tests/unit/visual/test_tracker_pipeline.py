@@ -11,7 +11,8 @@ from subtitlegen.visual.models import (
     VisualObservation,
 )
 from subtitlegen.visual.pipeline import VisualTextPipeline
-from subtitlegen.visual.tracker import VisualEventTracker
+from subtitlegen.visual.proposals import TemporalDifferenceProposer
+from subtitlegen.visual.tracker import VisualEventTracker, perceptual_hash
 
 
 def _observation(
@@ -90,8 +91,45 @@ class FakeDetector:
         return self.boxes
 
 
+class RecordingDetector(FakeDetector):
+    def __init__(self) -> None:
+        super().__init__()
+        self.shapes: list[tuple[int, ...]] = []
+
+    def detect(self, image: Any) -> tuple[BoundingBox, ...]:
+        self.shapes.append(tuple(image.shape))
+        return (BoundingBox(0, 0, image.shape[1], image.shape[0]),)
+
+
+class BrightDetector:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def detect(self, image: Any) -> tuple[BoundingBox, ...]:
+        self.calls += 1
+        if not np.asarray(image).any():
+            return ()
+        return (BoundingBox(0, 0, image.shape[1], image.shape[0]),)
+
+
+class FakeRegionProposer:
+    def __init__(self) -> None:
+        self.resets = 0
+
+    def reset(self) -> None:
+        self.resets += 1
+
+    def propose(
+        self,
+        _image: Any,
+        *,
+        scene_change: bool = False,
+    ) -> tuple[BoundingBox, ...]:
+        return (BoundingBox(2, 2, 4, 4),)
+
+
 class FakeOcr:
-    def __init__(self, text: str = "日本") -> None:
+    def __init__(self, text: str = "日本語字幕") -> None:
         self.text = text
         self.calls = 0
 
@@ -214,6 +252,31 @@ def test_visual_pipeline_filters_small_and_upper_frame_regions(tmp_path: Path) -
     assert ocr.calls == 0
 
 
+def test_visual_pipeline_japanese_character_threshold_is_configurable(
+    tmp_path: Path,
+) -> None:
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    media = tmp_path / "video.mp4"
+    default_pipeline = VisualTextPipeline(
+        FakeSampler(image),
+        FakeDetector(),
+        FakeOcr("日本語字"),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+    )
+    configured_pipeline = VisualTextPipeline(
+        FakeSampler(image),
+        FakeDetector(),
+        FakeOcr("日本語字"),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        minimum_japanese_characters=4,
+    )
+
+    assert default_pipeline.process(media) == ()
+    assert len(configured_pipeline.process(media)) == 1
+
+
 def test_visual_pipeline_does_not_cache_perceptual_hash_collisions(
     tmp_path: Path,
 ) -> None:
@@ -234,3 +297,103 @@ def test_visual_pipeline_does_not_cache_perceptual_hash_collisions(
     pipeline.process(tmp_path / "video.mp4")
 
     assert ocr.calls == 2
+
+
+def test_visual_pipeline_detects_only_proposed_regions_and_restores_coordinates(
+    tmp_path: Path,
+) -> None:
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    detector = RecordingDetector()
+    proposer = FakeRegionProposer()
+    pipeline = VisualTextPipeline(
+        FakeSampler(image),
+        detector,
+        FakeOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        region_proposer=proposer,
+    )
+
+    events = pipeline.process(tmp_path / "video.mp4")
+
+    assert detector.shapes == [(416, 416, 3), (416, 416, 3)]
+    assert events[0].box == BoundingBox(2, 2, 4, 4)
+    assert proposer.resets == 1
+
+
+def test_visual_pipeline_preserves_static_card_appearance_interval(
+    tmp_path: Path,
+) -> None:
+    background = np.zeros((100, 200, 3), dtype=np.uint8)
+    card = background.copy()
+    card[40:80, 40:120] = 255
+
+    def components(
+        mask: np.ndarray[Any, Any],
+    ) -> tuple[tuple[int, int, int, int, int], ...]:
+        return ((8, 9, 8, 5, 40),) if mask.any() else ()
+
+    pipeline = VisualTextPipeline(
+        SequenceSampler((background, card, card, card, card, card, card)),
+        BrightDetector(),
+        FakeOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        region_proposer=TemporalDifferenceProposer(
+            analysis_width=32,
+            hold_frames=6,
+            full_frame_hold_frames=1,
+            padding_ratio=0,
+            component_extractor=components,
+        ),
+    )
+
+    events = pipeline.process(tmp_path / "video.mp4")
+
+    assert len(events) == 1
+    assert (events[0].start, events[0].end) == (0.5, 3.5)
+
+
+def test_visual_pipeline_refreshes_opening_card_after_full_frame_hold(
+    tmp_path: Path,
+) -> None:
+    card = np.full((100, 200, 3), 255, dtype=np.uint8)
+    pipeline = VisualTextPipeline(
+        SequenceSampler((card,) * 10),
+        BrightDetector(),
+        FakeOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        region_proposer=TemporalDifferenceProposer(
+            component_extractor=lambda _mask: (),
+        ),
+    )
+
+    events = pipeline.process(tmp_path / "video.mp4")
+
+    assert len(events) == 1
+    assert (events[0].start, events[0].end) == (0.0, 5.0)
+
+
+def test_visual_pipeline_rechecks_perceptual_hash_collision(
+    tmp_path: Path,
+) -> None:
+    black = np.zeros((100, 200, 3), dtype=np.uint8)
+    white = np.full((100, 200, 3), 255, dtype=np.uint8)
+    gray = np.full((100, 200, 3), 128, dtype=np.uint8)
+    detector = BrightDetector()
+    pipeline = VisualTextPipeline(
+        SequenceSampler((black, white, white, white, gray, gray)),
+        detector,
+        FakeOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        region_proposer=FakeRegionProposer(),
+        minimum_box_area_ratio=0,
+        minimum_vertical_center_ratio=0,
+    )
+
+    pipeline.process(tmp_path / "video.mp4")
+
+    assert perceptual_hash(white) == perceptual_hash(gray)
+    assert detector.calls >= 5

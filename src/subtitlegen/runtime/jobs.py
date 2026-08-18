@@ -7,13 +7,13 @@ import tempfile
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Any, Literal
 
 from filelock import FileLock as PlatformFileLock
 from filelock import Timeout
 
-StageStatus = Literal["pending", "running", "complete", "failed"]
-SCHEMA_VERSION = 1
+StageStatus = Literal["pending", "running", "complete", "failed", "cancelled"]
+SCHEMA_VERSION = 2
 
 
 class FileLock:
@@ -53,6 +53,8 @@ class StageRecord:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("stage name must not be empty")
+        if self.status not in {"pending", "running", "complete", "failed", "cancelled"}:
+            raise ValueError(f"unsupported stage status {self.status}")
         if self.status == "complete" and not self.artifact:
             raise ValueError("complete stages require an artifact")
 
@@ -63,6 +65,7 @@ class JobManifest:
     job_id: str
     source_name: str
     source_sha256: str
+    created_at: str = ""
     stages: tuple[StageRecord, ...] = ()
 
     def __post_init__(self) -> None:
@@ -99,16 +102,25 @@ class PortableJobStore:
             job_id=job_id,
             source_name=source.name,
             source_sha256=source_hash,
+            created_at=datetime.now(UTC).isoformat(),
         )
         self.save(manifest)
         return manifest
 
     def load(self, job_id: str) -> JobManifest:
+        with FileLock(self._lock_path(job_id)):
+            return self._load_unlocked(job_id)
+
+    def _load_unlocked(self, job_id: str) -> JobManifest:
         path = self._manifest_path(job_id)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            data, migrated = self._migrate(data, path)
             stages = tuple(StageRecord(**item) for item in data.pop("stages", []))
-            return JobManifest(**data, stages=stages)
+            manifest = JobManifest(**data, stages=stages)
+            if migrated:
+                self._write_unlocked(manifest)
+            return manifest
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise RuntimeError(f"invalid job manifest: {path}") from error
 
@@ -132,7 +144,7 @@ class PortableJobStore:
         error: str | None = None,
     ) -> JobManifest:
         with FileLock(self._lock_path(manifest.job_id)):
-            current = self.load(manifest.job_id)
+            current = self._load_unlocked(manifest.job_id)
             updated = current.with_stage(
                 StageRecord(
                     name=name,
@@ -165,6 +177,21 @@ class PortableJobStore:
 
     def _lock_path(self, job_id: str) -> Path:
         return self._root / job_id / ".manifest.lock"
+
+    @staticmethod
+    def _migrate(data: object, path: Path) -> tuple[dict[str, Any], bool]:
+        if not isinstance(data, dict):
+            raise ValueError("job manifest must be an object")
+        migrated = dict(data)
+        version = migrated.get("schema_version", 1)
+        changed = version == 1 or "schema_version" not in migrated
+        if changed:
+            migrated["schema_version"] = SCHEMA_VERSION
+            migrated.setdefault(
+                "created_at",
+                datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat(),
+            )
+        return migrated, changed
 
     @staticmethod
     def _sha256(path: Path) -> str:

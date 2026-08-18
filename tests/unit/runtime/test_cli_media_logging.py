@@ -21,6 +21,7 @@ class FakeService:
         self.paths: list[Path] = []
         self.outputs: list[Path] = []
         self.options: list[dict[str, Any]] = []
+        self.closed = False
 
     def process(self, media_path: Path, output_path: Path, **kwargs: Any) -> RuntimeResult:
         self.paths.append(media_path)
@@ -32,6 +33,9 @@ class FakeService:
             encoding="utf-8",
         )
         return RuntimeResult("generated", output_path, "job")
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_discover_media_handles_recursive_paths_and_spaces(tmp_path: Path) -> None:
@@ -110,6 +114,7 @@ def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
     assert output_dir / "another folder" / "video.srt" in fake.outputs
     assert selected_profiles[0].profile_id == "avatar"
     assert selected_backends == ["mlx"]
+    assert fake.closed
 
 
 def test_cli_benchmark_outputs_json(monkeypatch: Any, tmp_path: Path) -> None:
@@ -127,7 +132,38 @@ def test_cli_benchmark_outputs_json(monkeypatch: Any, tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert json.loads(result.stdout)["backend"] == "fake"
+    assert fake.closed
     assert fake.options[0]["refresh_stages"] is True
+
+
+def test_cli_benchmark_preserves_interrupt_and_closes_service(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+
+    class InterruptingService(FakeService):
+        def process(
+            self,
+            media_path: Path,
+            output_path: Path,
+            **kwargs: Any,
+        ) -> RuntimeResult:
+            raise KeyboardInterrupt
+
+    service = InterruptingService()
+    monkeypatch.setattr(
+        cli_module,
+        "_service",
+        lambda *_args, **_kwargs: (service, "fake"),
+    )
+
+    result = CliRunner().invoke(app, ["benchmark", str(media)])
+
+    assert result.exit_code == 130
+    assert not isinstance(result.exception, NameError)
+    assert service.closed
 
 
 def test_cli_applies_preset_language_before_execution(monkeypatch: Any) -> None:
@@ -193,11 +229,14 @@ def test_cli_visual_text_runs_after_dialogue_and_writes_ass(
 def test_visual_service_uses_fps_for_sampling_timing_and_cache(tmp_path: Path) -> None:
     one_fps = cli_module._visual_service(None, None, tmp_path / "one", 1.0)
     two_fps = cli_module._visual_service(None, None, tmp_path / "two", 2.0)
+    short_cards = cli_module._visual_service(None, None, tmp_path / "short", 1.0, 2)
 
     assert one_fps._visual_pipeline._sampler._interval == 1.0
     assert one_fps._visual_pipeline._tracker._frame_interval == 1.0
     assert two_fps._visual_pipeline._sampler._interval == 0.5
     assert two_fps._visual_pipeline._tracker._frame_interval == 0.5
     assert one_fps._visual_key != two_fps._visual_key
+    assert one_fps._visual_key != short_cards._visual_key
     one_fps.close()
     two_fps.close()
+    short_cards.close()

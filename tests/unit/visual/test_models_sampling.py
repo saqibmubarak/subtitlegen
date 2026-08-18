@@ -12,6 +12,7 @@ from subtitlegen.visual.models import (
     VisualObservation,
 )
 from subtitlegen.visual.sampler import FrameSampler
+from subtitlegen.visual.settings import VisualPipelineSettings
 from subtitlegen.visual.tracker import perceptual_hash
 
 
@@ -70,3 +71,13 @@ def test_perceptual_hash_is_deterministic_and_rejects_empty_images() -> None:
     assert perceptual_hash(image) == perceptual_hash(image.copy())
     with pytest.raises(ValueError):
         perceptual_hash(np.array([]))
+
+
+def test_visual_pipeline_settings_validate_runtime_overrides() -> None:
+    settings = VisualPipelineSettings(frames_per_second=2, minimum_japanese_characters=2)
+    assert settings.frame_interval_seconds == 0.5
+    assert settings.cache_identity()
+    with pytest.raises(ValueError):
+        VisualPipelineSettings(frames_per_second=0.5)
+    with pytest.raises(ValueError):
+        VisualPipelineSettings(minimum_japanese_characters=0)

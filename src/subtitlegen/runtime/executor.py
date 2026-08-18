@@ -98,6 +98,14 @@ class StageExecutor:
                 artifact=relative,
             )
             return manifest, artifact
+        except (KeyboardInterrupt, SystemExit):
+            self._store.update_stage(
+                manifest,
+                stage_name,
+                "cancelled",
+                error="cancelled by user",
+            )
+            raise
         except Exception as error:
             self._store.update_stage(manifest, stage_name, "failed", error=str(error))
             raise

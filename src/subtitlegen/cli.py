@@ -40,8 +40,10 @@ from subtitlegen.visual.detection import (
 from subtitlegen.visual.merger import SubtitleMerger
 from subtitlegen.visual.ocr import MangaOcrEngine
 from subtitlegen.visual.pipeline import VisualTextPipeline
+from subtitlegen.visual.proposals import TemporalDifferenceProposer
 from subtitlegen.visual.sampler import FrameSampler
 from subtitlegen.visual.service import MultimodalSubtitleService
+from subtitlegen.visual.settings import VisualPipelineSettings
 from subtitlegen.visual.tracker import VisualEventTracker
 from subtitlegen.visual.translation import NllbLocalTranslator
 
@@ -136,11 +138,12 @@ def _visual_service(
     detector_model: Path | None,
     cache_dir: Path,
     frames_per_second: float,
+    minimum_japanese_characters: int = 5,
 ) -> MultimodalSubtitleService:
-    scene_threshold = 0.28
-    minimum_box_area_ratio = 0.01
-    minimum_vertical_center_ratio = 0.45
-    tracker_settings = (1.25, 2, 0.25, 0.65, 8)
+    visual_settings = VisualPipelineSettings(
+        frames_per_second=frames_per_second,
+        minimum_japanese_characters=minimum_japanese_characters,
+    )
     paddle = PaddleOcrDetector()
     detector = (
         FallbackTextDetector(OpenCvDbNetDetector(detector_model), paddle)
@@ -149,8 +152,8 @@ def _visual_service(
     )
     pipeline = VisualTextPipeline(
         FrameSampler(
-            frames_per_second=frames_per_second,
-            scene_threshold=scene_threshold,
+            frames_per_second=visual_settings.frames_per_second,
+            scene_threshold=visual_settings.scene_threshold,
         ),
         detector,
         MangaOcrEngine(),
@@ -159,15 +162,27 @@ def _visual_service(
             device="cuda" if DeviceCapabilities.detect().cuda_devices else "cpu",
         ),
         VisualEventTracker(
-            max_gap_seconds=tracker_settings[0],
-            frame_interval_seconds=1 / frames_per_second,
-            min_observations=tracker_settings[1],
-            box_iou_threshold=tracker_settings[2],
-            text_similarity_threshold=tracker_settings[3],
-            hash_distance_threshold=tracker_settings[4],
+            max_gap_seconds=visual_settings.tracker_max_gap_seconds,
+            frame_interval_seconds=visual_settings.frame_interval_seconds,
+            min_observations=visual_settings.tracker_minimum_observations,
+            box_iou_threshold=visual_settings.tracker_box_iou_threshold,
+            text_similarity_threshold=visual_settings.tracker_text_similarity_threshold,
+            hash_distance_threshold=visual_settings.tracker_hash_distance_threshold,
         ),
-        minimum_box_area_ratio=minimum_box_area_ratio,
-        minimum_vertical_center_ratio=minimum_vertical_center_ratio,
+        region_proposer=TemporalDifferenceProposer(
+            difference_threshold=visual_settings.proposal_difference_threshold,
+            minimum_changed_area_ratio=visual_settings.proposal_minimum_area_ratio,
+            maximum_changed_area_ratio=visual_settings.proposal_maximum_area_ratio,
+            padding_ratio=visual_settings.proposal_padding_ratio,
+            hold_frames=visual_settings.proposal_hold_frames,
+            full_frame_hold_frames=visual_settings.proposal_full_frame_hold_frames,
+            analysis_width=visual_settings.proposal_analysis_width,
+            maximum_regions=visual_settings.proposal_maximum_regions,
+        ),
+        detector_input_size=visual_settings.detector_input_size,
+        minimum_japanese_characters=visual_settings.minimum_japanese_characters,
+        minimum_box_area_ratio=visual_settings.minimum_box_area_ratio,
+        minimum_vertical_center_ratio=visual_settings.minimum_vertical_center_ratio,
     )
     detector_identity = "paddle-ppocrv5-mobile"
     if detector_model is not None:
@@ -178,11 +193,7 @@ def _visual_service(
         "manga-ocr-0.1.16",
         NllbLocalTranslator.DEFAULT_MODEL,
         profile,
-        frames_per_second,
-        scene_threshold,
-        minimum_box_area_ratio,
-        minimum_vertical_center_ratio,
-        tracker_settings,
+        visual_settings.cache_identity(),
     )
     visual_key = "visual-" + hashlib.sha256(repr(visual_data).encode()).hexdigest()[:12]
     store = PortableJobStore(cache_dir / "jobs")
@@ -211,6 +222,10 @@ def generate(
     local_correction: Annotated[bool, typer.Option("--local-correction")] = False,
     visual_text: Annotated[bool, typer.Option("--visual-text")] = False,
     visual_fps: Annotated[float, typer.Option("--visual-fps")] = 1.5,
+    visual_min_japanese_characters: Annotated[
+        int,
+        typer.Option("--visual-min-japanese-characters", min=1),
+    ] = 5,
     detector_model: Annotated[Path | None, typer.Option("--detector-model")] = None,
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
@@ -243,28 +258,30 @@ def generate(
     failures = 0
     generated: list[tuple[Path, Path]] = []
     input_root = input_path.resolve()
-    for video in videos:
-        if output_dir is None:
-            output = video.with_suffix(".srt")
-        elif input_root.is_dir():
-            output = output_dir / video.relative_to(input_root).with_suffix(".srt")
-        else:
-            output = output_dir / f"{video.stem}.srt"
-        try:
-            result = service.process(
-                video,
-                output,
-                language=settings.asr.language,
-                overwrite=overwrite,
-            )
-            generated.append((video, output))
-            logger.info("%s: %s using %s", result.status, output, selected)
-        except Exception:
-            failures += 1
-            logger.exception("failed: %s", video)
-    close = getattr(service, "close", None)
-    if close is not None:
-        close()
+    try:
+        for video in videos:
+            if output_dir is None:
+                output = video.with_suffix(".srt")
+            elif input_root.is_dir():
+                output = output_dir / video.relative_to(input_root).with_suffix(".srt")
+            else:
+                output = output_dir / f"{video.stem}.srt"
+            try:
+                result = service.process(
+                    video,
+                    output,
+                    language=settings.asr.language,
+                    overwrite=overwrite,
+                )
+                generated.append((video, output))
+                logger.info("%s: %s using %s", result.status, output, selected)
+            except Exception:
+                failures += 1
+                logger.exception("failed: %s", video)
+    finally:
+        close = getattr(service, "close", None)
+        if close is not None:
+            close()
 
     if visual_text:
         multimodal = _visual_service(
@@ -272,6 +289,7 @@ def generate(
             detector_model,
             cache_dir,
             visual_fps,
+                visual_min_japanese_characters,
         )
         try:
             for video, dialogue_output in generated:
@@ -342,13 +360,16 @@ def benchmark(
     )
     output = cache_dir / "benchmarks" / f"{media_path.stem}-{selected}.srt"
     started = time.perf_counter()
-    result = service.process(
-        media_path,
-        output,
-        language=settings.asr.language,
-        overwrite=True,
-        refresh_stages=True,
-    )
+    try:
+        result = service.process(
+            media_path,
+            output,
+            language=settings.asr.language,
+            overwrite=True,
+            refresh_stages=True,
+        )
+    finally:
+        service.close()
     elapsed = time.perf_counter() - started
     duration = media_duration(media_path)
     report = analyze_cues(parse_srt(output))

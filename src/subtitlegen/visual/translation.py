@@ -118,11 +118,13 @@ class NllbLocalTranslator:
                 ) from error
 
             def factory(model_name: str, device: str) -> tuple[Any, Any]:
-                tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_class: Any = AutoTokenizer
+                model_class: Any = AutoModelForSeq2SeqLM
+                tokenizer = tokenizer_class.from_pretrained(
                     model_name,
                     src_lang="jpn_Jpan",
                 )
-                model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+                model = model_class.from_pretrained(model_name)
                 if device != "cpu":
                     model = model.to(device)
                 return tokenizer, model

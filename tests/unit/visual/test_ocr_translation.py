@@ -6,7 +6,11 @@ import pytest
 from subtitlegen.errors import BackendOutOfMemoryError
 from subtitlegen.profiles.models import GlossaryEntry, SeriesProfile
 from subtitlegen.visual.models import OcrResult
-from subtitlegen.visual.ocr import MangaOcrEngine, contains_japanese
+from subtitlegen.visual.ocr import (
+    MangaOcrEngine,
+    contains_japanese,
+    japanese_character_count,
+)
 from subtitlegen.visual.translation import NllbLocalTranslator
 
 
@@ -39,10 +43,14 @@ def test_manga_ocr_engine_and_japanese_filter_contract() -> None:
         calls.append(image)
         return " 日本 "
 
-    engine = MangaOcrEngine(model_factory=lambda: model)
+    engine = MangaOcrEngine(
+        model_factory=lambda: model,
+        image_factory=lambda image: image,
+    )
     result = engine.recognize(np.zeros((5, 5, 3), dtype=np.uint8))
     assert result == OcrResult("日本")
     assert contains_japanese(result.text)
+    assert japanese_character_count("日本, English") == 2
     assert not contains_japanese("English only")
     engine.close()
     engine.recognize(np.zeros((5, 5, 3), dtype=np.uint8))

@@ -16,10 +16,19 @@ in addition to that cadence. The default PaddleOCR detector is used before
 Manga OCR; pass `--detector-model comic-dbnet.onnx` to try an anime/comic DBNet
 model with PaddleOCR as its fallback.
 
-The initial precision policy intentionally keeps large lower-frame cards and
-rejects small or upper-frame detections. This targets location, character, and
-scene cards while deferring decorative sound effects and background signage.
-The policy is resolution-independent and can be changed through
+Before running a model detector, the pipeline compares low-resolution adjacent
+frames and proposes at most two changing regions. Proposals persist briefly so
+static title text is observed more than once. Regions are padded, normalized,
+and batched for Paddle/DBNet; Manga OCR only sees detector-confirmed crops.
+Stable detector-confirmed regions are compared perceptually and reused without
+rerunning either model. The repeatable six-second scene case fell from 21.69 to
+19.78 seconds while preserving its timing and quality thresholds.
+
+The precision policy then keeps large lower-frame cards, requires at least five
+Japanese characters, and rejects small or upper-frame detections. This targets
+location, character, and scene cards while deferring short decorative sound
+effects and background signage. The policy is resolution-independent and can
+be changed with `--visual-min-japanese-characters` or through
 `VisualTextPipeline` when embedding the package.
 
 Translation is local. NLLB-200 distilled 600M is the fallback, while exact and

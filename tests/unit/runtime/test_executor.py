@@ -59,3 +59,33 @@ def test_executor_records_failures_and_rejects_external_artifacts(tmp_path: Path
     loaded = store.load(manifest.job_id)
     stage = loaded.stage("asr")
     assert stage is not None and stage.status == "failed"
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_executor_records_user_cancellation(
+    tmp_path: Path,
+    interruption: type[BaseException],
+) -> None:
+    store, manifest = _job(tmp_path)
+    executor = StageExecutor(store, GpuResourceToken())
+
+    def cancel(_directory: Path) -> Path:
+        raise interruption
+
+    with pytest.raises(interruption):
+        executor.run(manifest, "asr", cancel)
+
+    stage = store.load(manifest.job_id).stage("asr")
+    assert stage is not None
+    assert stage.status == "cancelled"
+    assert stage.error == "cancelled by user"
+
+    def recover(job_directory: Path) -> Path:
+        artifact = job_directory / "recovered.json"
+        artifact.write_text("{}", encoding="utf-8")
+        return artifact
+
+    recovered, _ = executor.run(store.load(manifest.job_id), "asr", recover)
+    recovered_stage = recovered.stage("asr")
+    assert recovered_stage is not None
+    assert recovered_stage.status == "complete"

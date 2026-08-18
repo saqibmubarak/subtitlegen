@@ -10,6 +10,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+build/
 samples/
 model_cache/
 .subtitlegen/

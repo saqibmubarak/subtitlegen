@@ -14,6 +14,11 @@ class FrameReader(Protocol):
         """Yield timestamped RGB arrays in presentation order."""
 
 
+class FrameSource(Protocol):
+    def sample(self, media_path: Path) -> Iterable[SampledFrame]:
+        """Yield selected frames for visual processing."""
+
+
 class FrameSampler:
     def __init__(
         self,

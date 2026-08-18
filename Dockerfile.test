@@ -5,6 +5,8 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/models/huggingface \
     PADDLE_PDX_CACHE_HOME=/models/paddle
 
+ARG FEATURE_EXTRAS=cuda
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -12,7 +14,9 @@ RUN apt-get update \
 COPY pyproject.toml ReadMe.md ./
 COPY src ./src
 COPY profiles ./profiles
-RUN python -m pip install --no-cache-dir ".[cuda,ocr]"
+COPY tests ./tests
+COPY config.ini main.py config.py transcriber.py ./
+RUN python -m pip install --no-cache-dir ".[${FEATURE_EXTRAS},dev]"
 
-COPY config.ini ./
-ENTRYPOINT ["subtitlegen"]
+ENTRYPOINT ["python", "-m", "pytest"]
+CMD ["-q", "-m", "not model"]

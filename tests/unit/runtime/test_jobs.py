@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -97,3 +98,40 @@ def test_store_preserves_concurrent_stage_updates(tmp_path: Path) -> None:
 
     loaded = store.load(manifest.job_id)
     assert {stage.name for stage in loaded.stages} == {"asr", "subtitle"}
+
+
+def test_store_migrates_version_one_manifests(tmp_path: Path) -> None:
+    source = tmp_path / "video.mp4"
+    source.write_bytes(b"media")
+    store = PortableJobStore(tmp_path / "jobs")
+    manifest = store.create(source)
+    path = store.job_directory(manifest) / "manifest.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["schema_version"] = 1
+    data.pop("created_at")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    migrated = store.load(manifest.job_id)
+
+    assert migrated.schema_version == SCHEMA_VERSION
+    assert migrated.created_at
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == SCHEMA_VERSION
+    assert persisted["created_at"] == migrated.created_at
+
+
+def test_store_treats_missing_schema_version_as_version_one(tmp_path: Path) -> None:
+    source = tmp_path / "video.mp4"
+    source.write_bytes(b"media")
+    store = PortableJobStore(tmp_path / "jobs")
+    manifest = store.create(source)
+    path = store.job_directory(manifest) / "manifest.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("schema_version")
+    data.pop("created_at")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    migrated = store.load(manifest.job_id)
+
+    assert migrated.schema_version == SCHEMA_VERSION
+    assert migrated.created_at

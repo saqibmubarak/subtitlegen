@@ -21,19 +21,25 @@ def contains_japanese(text: str) -> bool:
     return JAPANESE_PATTERN.search(text) is not None
 
 
+def japanese_character_count(text: str) -> int:
+    return len(JAPANESE_PATTERN.findall(text))
+
+
 class MangaOcrEngine:
-    def __init__(self, *, model_factory: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model_factory: Callable[[], Any] | None = None,
+        image_factory: Callable[[Any], Any] | None = None,
+    ) -> None:
         self._model_factory = model_factory
+        self._image_factory = image_factory
         self._model: Any | None = None
 
     def recognize(self, image: Any) -> OcrResult:
         model = self._load_model()
-        try:
-            from PIL import Image
-        except ImportError as error:
-            raise BackendUnavailableError("manga-ocr requires subtitlegen[ocr]") from error
-        pil_image = Image.fromarray(np.asarray(image, dtype=np.uint8)).convert("RGB")
-        return OcrResult(str(model(pil_image)).strip())
+        prepared = self._prepare_image(image)
+        return OcrResult(str(model(prepared)).strip())
 
     def close(self) -> None:
         self._model = None
@@ -52,3 +58,12 @@ class MangaOcrEngine:
             factory = MangaOcr
         self._model = factory()
         return self._model
+
+    def _prepare_image(self, image: Any) -> Any:
+        if self._image_factory is not None:
+            return self._image_factory(image)
+        try:
+            from PIL import Image
+        except ImportError as error:
+            raise BackendUnavailableError("manga-ocr requires subtitlegen[ocr]") from error
+        return Image.fromarray(np.asarray(image, dtype=np.uint8)).convert("RGB")

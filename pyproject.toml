@@ -13,7 +13,7 @@ dependencies = [
   "ctranslate2==4.7.2",
   "filelock==3.29.0",
   "faster-whisper==1.2.1",
-  "numpy==1.26.4",
+  "numpy==2.2.6",
   "PyYAML==6.0.2",
   "typer==0.25.1",
 ]
@@ -24,13 +24,13 @@ mac = ["mlx-whisper==0.4.3"]
 nemo = ["nemo_toolkit[asr]==3.0.0"]
 ocr = [
   "manga-ocr==0.1.16",
-  "opencv-python-headless==4.11.0.86",
+  "opencv-contrib-python==4.10.0.84",
   "paddleocr==3.7.0",
   "paddlepaddle==3.3.1",
   "Pillow==12.3.0",
   "scipy==1.17.1",
   "sentencepiece==0.2.2",
-  "transformers==5.15.0",
+  "transformers==4.57.6",
 ]
 dev = [
   "hypothesis>=6,<7",

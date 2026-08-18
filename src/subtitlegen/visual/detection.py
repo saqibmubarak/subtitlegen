@@ -171,6 +171,34 @@ class FallbackTextDetector:
             detected = ()
         return detected or self._fallback.detect(image)
 
+    def detect_batch(
+        self,
+        images: Sequence[Any],
+    ) -> tuple[tuple[BoundingBox, ...], ...]:
+        primary_batch = getattr(self._primary, "detect_batch", None)
+        if primary_batch is None:
+            return tuple(tuple(self.detect(image)) for image in images)
+        try:
+            primary_results = tuple(tuple(boxes) for boxes in primary_batch(images))
+        except (BackendUnavailableError, RuntimeError):
+            primary_results = tuple(() for _ in images)
+        if len(primary_results) != len(images):
+            raise RuntimeError("primary text detector returned an incomplete batch")
+        missing = [index for index, boxes in enumerate(primary_results) if not boxes]
+        if not missing:
+            return primary_results
+        fallback_images = [images[index] for index in missing]
+        fallback_batch = getattr(self._fallback, "detect_batch", None)
+        fallback_results = (
+            fallback_batch(fallback_images)
+            if fallback_batch is not None
+            else tuple(self._fallback.detect(image) for image in fallback_images)
+        )
+        results = list(primary_results)
+        for index, boxes in zip(missing, fallback_results, strict=True):
+            results[index] = tuple(boxes)
+        return tuple(results)
+
     def close(self) -> None:
         for detector in (self._primary, self._fallback):
             close = getattr(detector, "close", None)

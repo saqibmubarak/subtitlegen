@@ -58,8 +58,8 @@ This maximizes throughput without duplicating model memory. Actual batch sizes a
 Target CLI:
 
 ```bash
-docker compose run --rm subtitler /data/videos --profile onepiece --preset quality
-python main.py ./videos --profile avatar --preset mac-quality
+docker compose run --rm subtitler generate /data/videos --profile one-piece --preset quality
+subtitlegen generate ./videos --profile avatar --preset quality
 ```
 
 ## Presets
