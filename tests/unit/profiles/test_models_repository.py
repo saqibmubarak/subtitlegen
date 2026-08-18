@@ -33,6 +33,15 @@ def test_series_profile_rejects_schema_and_alias_collisions() -> None:
                 GlossaryEntry("Avatar", aliases=()),
             ),
         )
+    with pytest.raises(ValueError):
+        SeriesProfile(
+            1,
+            "one-piece",
+            "One Piece",
+            "en",
+            (),
+            (("日本", "Japan"), ("日本", "Nippon")),
+        )
 
 
 def test_repository_loads_versioned_profiles() -> None:
@@ -41,6 +50,10 @@ def test_repository_loads_versioned_profiles() -> None:
     avatar = repository.load("avatar")
     assert avatar.profile_id == "avatar"
     assert any(entry.canonical == "Aang" for entry in avatar.terms)
+    one_piece = repository.load("one-piece")
+    assert dict(one_piece.visual_translations)["一人はぐれた錦えもん"] == (
+        "Kin'emon Gets Separated"
+    )
     with pytest.raises(FileNotFoundError):
         repository.load("missing")
     with pytest.raises(ValueError):

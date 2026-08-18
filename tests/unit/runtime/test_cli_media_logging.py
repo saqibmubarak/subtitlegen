@@ -13,6 +13,7 @@ from subtitlegen.media import discover_media, load_audio_mono, media_duration
 from subtitlegen.runtime.capabilities import DeviceCapabilities
 from subtitlegen.runtime.service import RuntimeResult
 from subtitlegen.settings import AppSettings, AsrSettings
+from subtitlegen.visual.service import MultimodalResult
 
 
 class FakeService:
@@ -142,3 +143,61 @@ def test_cli_applies_preset_language_before_execution(monkeypatch: Any) -> None:
     )
     assert backend == "parakeet"
     assert settings.asr.language == "en"
+
+
+def test_cli_visual_text_runs_after_dialogue_and_writes_ass(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "video.mp4"
+    video.touch()
+    dialogue_service = FakeService()
+
+    class FakeMultimodal:
+        def __init__(self) -> None:
+            self.outputs: list[Path] = []
+            self.closed = False
+
+        def process(
+            self,
+            _video: Path,
+            _dialogue: Path,
+            output: Path,
+        ) -> MultimodalResult:
+            self.outputs.append(output)
+            output.write_text("ASS", encoding="utf-8")
+            return MultimodalResult(output, 1, 1)
+
+        def close(self) -> None:
+            self.closed = True
+
+    multimodal = FakeMultimodal()
+    monkeypatch.setattr(
+        cli_module,
+        "_service",
+        lambda *_args, **_kwargs: (dialogue_service, "fake"),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_visual_service",
+        lambda *_args, **_kwargs: multimodal,
+    )
+
+    result = CliRunner().invoke(app, ["generate", str(video), "--visual-text"])
+
+    assert result.exit_code == 0
+    assert multimodal.outputs == [video.with_suffix(".ass")]
+    assert multimodal.closed
+
+
+def test_visual_service_uses_fps_for_sampling_timing_and_cache(tmp_path: Path) -> None:
+    one_fps = cli_module._visual_service(None, None, tmp_path / "one", 1.0)
+    two_fps = cli_module._visual_service(None, None, tmp_path / "two", 2.0)
+
+    assert one_fps._visual_pipeline._sampler._interval == 1.0
+    assert one_fps._visual_pipeline._tracker._frame_interval == 1.0
+    assert two_fps._visual_pipeline._sampler._interval == 0.5
+    assert two_fps._visual_pipeline._tracker._frame_interval == 0.5
+    assert one_fps._visual_key != two_fps._visual_key
+    one_fps.close()
+    two_fps.close()

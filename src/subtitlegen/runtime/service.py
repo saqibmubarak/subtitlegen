@@ -126,6 +126,9 @@ class RuntimeService:
         )
         return RuntimeResult(status, output_path, manifest.job_id)
 
+    def close(self) -> None:
+        self._backend.close()
+
     def _is_current_output(self, output_path: Path, source_sha256: str) -> bool:
         try:
             data = json.loads(self._metadata_path(output_path).read_text(encoding="utf-8"))

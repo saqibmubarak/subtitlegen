@@ -23,6 +23,24 @@ def word_error_rate(reference: str, hypothesis: str) -> float:
     return previous[-1] / len(expected)
 
 
+def character_error_rate(reference: str, hypothesis: str) -> float:
+    if not reference:
+        return 0.0 if not hypothesis else 1.0
+    previous = list(range(len(hypothesis) + 1))
+    for row, expected_character in enumerate(reference, start=1):
+        current = [row]
+        for column, actual_character in enumerate(hypothesis, start=1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[column] + 1,
+                    previous[column - 1] + (expected_character != actual_character),
+                )
+            )
+        previous = current
+    return previous[-1] / len(reference)
+
+
 def terminology_recall(expected_terms: Sequence[str], hypothesis: str) -> float:
     if not expected_terms:
         return 1.0

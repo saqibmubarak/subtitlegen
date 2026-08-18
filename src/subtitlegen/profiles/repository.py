@@ -52,6 +52,7 @@ class ProfileRepository:
             "title",
             "language",
             "terms",
+            "visual_translations",
         }
         unknown_profile_fields = set(data) - allowed_profile_fields
         if unknown_profile_fields:
@@ -105,6 +106,9 @@ class ProfileRepository:
             title=data["title"],
             language=data.get("language", "en"),
             terms=tuple(terms),
+            visual_translations=ProfileRepository._translations(
+                data.get("visual_translations", {})
+            ),
         )
 
     @staticmethod
@@ -115,3 +119,12 @@ class ProfileRepository:
         if any(not isinstance(item, allowed) for item in value):
             raise ValueError("glossary collection values have invalid types")
         return tuple(str(item) for item in value)
+
+    @staticmethod
+    def _translations(value: Any) -> tuple[tuple[str, str], ...]:
+        if not isinstance(value, dict) or any(
+            not isinstance(source, str) or not isinstance(target, str)
+            for source, target in value.items()
+        ):
+            raise ValueError("visual_translations must map strings to strings")
+        return tuple((source, target) for source, target in value.items())

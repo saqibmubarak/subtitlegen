@@ -10,8 +10,9 @@ A phased plan for accurate dialogue subtitles, series-aware terminology, and tra
 4. [Delivery plan and final architecture](04-delivery-plan.md)
 5. [Series profiles](06-series-profiles.md)
 6. [ASR backends and presets](07-asr-backends.md)
-7. [References](05-references.md)
-8. [Requirements traceability](requirements-traceability.md)
+7. [Japanese visual text](08-visual-text.md)
+8. [References](05-references.md)
+9. [Requirements traceability](requirements-traceability.md)
 
 ## Target devices
 

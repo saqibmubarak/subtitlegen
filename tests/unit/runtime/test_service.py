@@ -16,6 +16,7 @@ class FakeBackend:
     def __init__(self) -> None:
         self.calls = 0
         self.contexts: list[AsrContext | None] = []
+        self.closed = False
 
     def transcribe(
         self,
@@ -31,6 +32,9 @@ class FakeBackend:
             language or "en",
             2,
         )
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _service(
@@ -56,6 +60,12 @@ def _service(
 def test_runtime_result_is_immutable_value(tmp_path: Path) -> None:
     result = RuntimeResult("skipped", tmp_path / "output.srt", None)
     assert result.status == "skipped"
+
+
+def test_service_releases_backend(tmp_path: Path) -> None:
+    backend = FakeBackend()
+    _service(tmp_path, backend).close()
+    assert backend.closed
 
 
 def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:

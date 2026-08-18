@@ -11,6 +11,7 @@ from typing import Annotated
 import typer
 
 from subtitlegen.cues.builder import CueBuilder
+from subtitlegen.export.ass import AssWriter
 from subtitlegen.export.srt import SrtWriter
 from subtitlegen.logging import configure_logging
 from subtitlegen.media import discover_media, media_duration
@@ -31,6 +32,18 @@ from subtitlegen.runtime.presets import PresetResolver
 from subtitlegen.runtime.service import RuntimeService
 from subtitlegen.settings import AppSettings, SettingsLoader
 from subtitlegen.validation import analyze_cues, is_valid_srt, parse_srt
+from subtitlegen.visual.detection import (
+    FallbackTextDetector,
+    OpenCvDbNetDetector,
+    PaddleOcrDetector,
+)
+from subtitlegen.visual.merger import SubtitleMerger
+from subtitlegen.visual.ocr import MangaOcrEngine
+from subtitlegen.visual.pipeline import VisualTextPipeline
+from subtitlegen.visual.sampler import FrameSampler
+from subtitlegen.visual.service import MultimodalSubtitleService
+from subtitlegen.visual.tracker import VisualEventTracker
+from subtitlegen.visual.translation import NllbLocalTranslator
 
 app = typer.Typer(no_args_is_help=True, help="Generate portable, synchronized subtitles.")
 logger = logging.getLogger(__name__)
@@ -118,6 +131,71 @@ def _resolve_runtime(
     return replace(settings, asr=resolved.settings), resolved.backend
 
 
+def _visual_service(
+    profile: SeriesProfile | None,
+    detector_model: Path | None,
+    cache_dir: Path,
+    frames_per_second: float,
+) -> MultimodalSubtitleService:
+    scene_threshold = 0.28
+    minimum_box_area_ratio = 0.01
+    minimum_vertical_center_ratio = 0.45
+    tracker_settings = (1.25, 2, 0.25, 0.65, 8)
+    paddle = PaddleOcrDetector()
+    detector = (
+        FallbackTextDetector(OpenCvDbNetDetector(detector_model), paddle)
+        if detector_model is not None
+        else paddle
+    )
+    pipeline = VisualTextPipeline(
+        FrameSampler(
+            frames_per_second=frames_per_second,
+            scene_threshold=scene_threshold,
+        ),
+        detector,
+        MangaOcrEngine(),
+        NllbLocalTranslator(
+            profile=profile,
+            device="cuda" if DeviceCapabilities.detect().cuda_devices else "cpu",
+        ),
+        VisualEventTracker(
+            max_gap_seconds=tracker_settings[0],
+            frame_interval_seconds=1 / frames_per_second,
+            min_observations=tracker_settings[1],
+            box_iou_threshold=tracker_settings[2],
+            text_similarity_threshold=tracker_settings[3],
+            hash_distance_threshold=tracker_settings[4],
+        ),
+        minimum_box_area_ratio=minimum_box_area_ratio,
+        minimum_vertical_center_ratio=minimum_vertical_center_ratio,
+    )
+    detector_identity = "paddle-ppocrv5-mobile"
+    if detector_model is not None:
+        with detector_model.open("rb") as model_file:
+            detector_identity = hashlib.file_digest(model_file, "sha256").hexdigest()
+    visual_data = (
+        detector_identity,
+        "manga-ocr-0.1.16",
+        NllbLocalTranslator.DEFAULT_MODEL,
+        profile,
+        frames_per_second,
+        scene_threshold,
+        minimum_box_area_ratio,
+        minimum_vertical_center_ratio,
+        tracker_settings,
+    )
+    visual_key = "visual-" + hashlib.sha256(repr(visual_data).encode()).hexdigest()[:12]
+    store = PortableJobStore(cache_dir / "jobs")
+    return MultimodalSubtitleService(
+        pipeline,
+        SubtitleMerger(),
+        AssWriter(),
+        store=store,
+        executor=StageExecutor(store, GpuResourceToken()),
+        visual_key=visual_key,
+    )
+
+
 @app.command()
 def generate(
     input_path: Annotated[Path, typer.Argument(exists=True, readable=True)],
@@ -131,6 +209,9 @@ def generate(
     arc: Annotated[str | None, typer.Option("--arc")] = None,
     episode: Annotated[str | None, typer.Option("--episode")] = None,
     local_correction: Annotated[bool, typer.Option("--local-correction")] = False,
+    visual_text: Annotated[bool, typer.Option("--visual-text")] = False,
+    visual_fps: Annotated[float, typer.Option("--visual-fps")] = 1.5,
+    detector_model: Annotated[Path | None, typer.Option("--detector-model")] = None,
     overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
@@ -160,6 +241,7 @@ def generate(
         raise typer.BadParameter("no supported media files were found")
 
     failures = 0
+    generated: list[tuple[Path, Path]] = []
     input_root = input_path.resolve()
     for video in videos:
         if output_dir is None:
@@ -175,10 +257,40 @@ def generate(
                 language=settings.asr.language,
                 overwrite=overwrite,
             )
+            generated.append((video, output))
             logger.info("%s: %s using %s", result.status, output, selected)
         except Exception:
             failures += 1
             logger.exception("failed: %s", video)
+    close = getattr(service, "close", None)
+    if close is not None:
+        close()
+
+    if visual_text:
+        multimodal = _visual_service(
+            series_profile,
+            detector_model,
+            cache_dir,
+            visual_fps,
+        )
+        try:
+            for video, dialogue_output in generated:
+                try:
+                    visual_result = multimodal.process(
+                        video,
+                        dialogue_output,
+                        dialogue_output.with_suffix(".ass"),
+                    )
+                    logger.info(
+                        "generated: %s with %d visual events",
+                        visual_result.output_path,
+                        visual_result.visual_events,
+                    )
+                except Exception:
+                    failures += 1
+                    logger.exception("visual text failed: %s", video)
+        finally:
+            multimodal.close()
     if failures:
         raise typer.Exit(code=1)
 

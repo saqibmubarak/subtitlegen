@@ -1,0 +1,78 @@
+schema_version: 1
+sampling_fps: 4
+coordinate_space: [1920, 1080]
+samples:
+  - video: "[Muhn Pace] Dressrosa 01.mp4"
+    annotations:
+      - id: dressrosa-map
+        category: location_card
+        start: 1241.75
+        end: 1242.50
+        representative_timestamp: 1242.00
+        box: [1250, 515, 535, 140]
+        source_text: "ドレスローザ"
+        translation: "Dressrosa"
+  - video: "[Muhn Pace] Dressrosa 02.mp4"
+    annotations:
+      - id: corrida-colosseum
+        category: location_card
+        start: 445.75
+        end: 450.00
+        representative_timestamp: 446.00
+        box: [575, 830, 780, 150]
+        source_text: "コリーダコロシアム"
+        translation: "Corrida Colosseum"
+      - id: violet
+        category: character_card
+        start: 787.00
+        end: 792.50
+        representative_timestamp: 788.00
+        crop_padding_ratio: 0.05
+        box: [675, 850, 560, 150]
+        source_text: "ヴァイオレット"
+        translation: "Violet"
+      - id: one-legged-soldier
+        category: character_card
+        start: 1053.00
+        end: 1057.50
+        representative_timestamp: 1054.00
+        box: [740, 760, 450, 125]
+        source_text: "片足の兵隊"
+        translation: "One-Legged Soldier"
+  - video: "[Muhn Pace] Dressrosa 03.mp4"
+    annotations:
+      - id: kinemon-separated
+        category: scene_card
+        start: 1318.50
+        end: 1322.25
+        representative_timestamp: 1320.00
+        box: [520, 895, 880, 135]
+        source_text: "一人はぐれた錦えもん"
+        translation: "Kin'emon Gets Separated"
+  - video: "[Muhn Pace] Dressrosa 04.mp4"
+    annotations:
+      - id: bellamy
+        category: character_card
+        start: 350.50
+        end: 359.75
+        representative_timestamp: 352.00
+        box: [435, 815, 1055, 200]
+        source_text: "「元ベラミー海賊団船長」"
+        translation: "Former Bellamy Pirates Captain"
+      - id: elizabello
+        category: character_card
+        start: 483.75
+        end: 485.00
+        representative_timestamp: 484.00
+        box: [235, 815, 950, 190]
+        source_text: "エリザベローII世"
+        translation: "Elizabello II"
+  - video: "[Muhn Pace] Dressrosa 05.mp4"
+    annotations: []
+    reviewed_negative_intervals:
+      - [200.0, 215.0]
+      - [765.0, 820.0]
+      - [1025.0, 1040.0]
+deferred_categories:
+  - decorative_sound_effect
+  - background_signage

@@ -10,7 +10,7 @@
 | Windows Docker and Mac native | Docker CUDA profile and MLX adapter | [Phase 1 Mac evidence](benchmarks/phase-1-mac.md), Compose validation |
 | Series terminology | Versioned profiles, scoped context, safe normalization | [Phase 2 context evidence](benchmarks/phase-2-context.md), terminology fixture |
 | Interchangeable ASR | Four normalized adapters and capability-aware presets | shared adapter contracts, [Phase 3 evidence](benchmarks/phase-3-backends.md) |
-| Japanese on-screen translation | Phase 4 visual pipeline | Dressrosa annotations and ASS tests |
+| Japanese on-screen translation | Detection, Manga OCR, local NLLB/profile translation, tracking, and ASS merge | [Phase 4 evidence](benchmarks/phase-4-visual.md), Dressrosa model tests, ASS golden/round-trip tests |
 | Resumable intermediates | `PortableJobStore`, `StageExecutor` | job/executor/service tests |
 
 This table is updated before each phase commit. See [requirements](01-requirements.md).

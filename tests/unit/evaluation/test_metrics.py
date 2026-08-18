@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from subtitlegen.evaluation.metrics import (
+    character_error_rate,
     mean_timestamp_error,
     terminology_recall,
     word_error_rate,
@@ -16,6 +17,9 @@ def test_word_error_rate_handles_edits_and_empty_references() -> None:
     assert word_error_rate("one two three", "one too three") == pytest.approx(1 / 3)
     assert word_error_rate("", "") == 0
     assert word_error_rate("", "unexpected") == 1
+    assert character_error_rate("日本語", "日本") == pytest.approx(1 / 3)
+    assert character_error_rate("", "") == 0
+    assert character_error_rate("", "x") == 1
 
 
 def test_terminology_recall_matches_complete_case_insensitive_terms() -> None:

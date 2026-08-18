@@ -44,12 +44,21 @@ class SeriesProfile:
     title: str
     language: str
     terms: tuple[GlossaryEntry, ...]
+    visual_translations: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.schema_version != 1:
             raise ValueError(f"unsupported profile schema {self.schema_version}")
         if not self.profile_id or not self.title or not self.language:
             raise ValueError("profile identity fields must not be blank")
+        if any(
+            not source.strip() or not target.strip()
+            for source, target in self.visual_translations
+        ):
+            raise ValueError("visual translation entries must not be blank")
+        sources = [source for source, _ in self.visual_translations]
+        if len(sources) != len(set(sources)):
+            raise ValueError("visual translation source text must be unique")
         owners: dict[str, str] = {}
         for entry in self.terms:
             for spelling in (entry.canonical, *entry.aliases):

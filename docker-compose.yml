@@ -61,3 +61,35 @@ services:
               count: 1
               capabilities: [gpu]
     command: ["generate", "/data/videos", "--preset", "english-fast", "--cache-dir", "/cache"]
+
+  visual:
+    profiles: ["ocr"]
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    environment:
+      HF_HOME: /models/huggingface
+      PADDLE_PDX_CACHE_HOME: /models/paddle
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
+      - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models
+      - ${JOB_CACHE_HOST_PATH:-./.subtitlegen-docker}:/cache
+      - ./config.ini:/app/config.ini:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command:
+      - generate
+      - /data/videos
+      - --preset
+      - fast
+      - --profile
+      - one-piece
+      - --visual-text
+      - --cache-dir
+      - /cache

@@ -2,6 +2,15 @@ schema_version: 1
 profile_id: one-piece
 title: One Piece
 language: en
+visual_translations:
+  "一人はぐれた錦えもん": "Kin'emon Gets Separated"
+  "「元ベラミー海賊団船長」": "Former Bellamy Pirates Captain"
+  "エリザベローII世": "Elizabello II"
+  "コリーダコロシアム": "Corrida Colosseum"
+  "ドレスローザ": "Dressrosa"
+  "ドレスローザ王国": "Dressrosa Kingdom"
+  "ヴァイオレット": "Violet"
+  "片足の兵隊": "One-Legged Soldier"
 terms:
   - canonical: Luffy
     aliases: [Monkey D Luffy, Monkey D. Luffy]
@@ -32,6 +41,10 @@ terms:
     arcs: [Dressrosa]
     normalize_aliases: false
     normalize_canonical: false
+  - canonical: Kin'emon
+    aliases: [Kinemon]
+    category: character
+    arcs: [Dressrosa]
   - canonical: Doflamingo
     aliases:
       - Donquixote Doflamingo
