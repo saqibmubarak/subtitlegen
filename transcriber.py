@@ -1,12 +1,14 @@
-from faster_whisper import WhisperModel
+import whisper
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+from whisper import Whisper, DecodingOptions
 
 # Global cache is crucial for multiprocessing performance
 _model_cache = {}
 
 
-def load_whisper_model(model_identifier: str, device: str, compute_type: str):
+def load_whisper_model(model_identifier: str, device: str, compute_type: str) -> Whisper:
     """
     Loads and caches the Faster Whisper model based on identifier, device, and compute type.
     This runs only once per process, solving the repeated loading bottleneck.
@@ -15,13 +17,9 @@ def load_whisper_model(model_identifier: str, device: str, compute_type: str):
 
     if cache_key not in _model_cache:
         print(
-            f"Loading Faster Whisper model: {model_identifier} on device: {device} with compute type: {compute_type}...")
+            f"Loading model: {model_identifier} on device: {device} with compute type: {compute_type}...")
         try:
-            model = WhisperModel(
-                model_identifier,
-                device=device,
-                compute_type=compute_type
-            )
+            model = whisper.load_model(model_identifier, device=device, in_memory=True, download_root="/cache")
             _model_cache[cache_key] = model
             print("Model loaded successfully.")
         except Exception as e:
@@ -37,33 +35,30 @@ def transcribe_video(
         device: str,
         language: Optional[str],
         compute_type: str
-) -> Dict[str, Any]:
+) -> Dict[str, Whisper]:
     """Transcribes a single video file and returns the result in the expected dictionary format."""
 
     model = load_whisper_model(model_identifier, device, compute_type)
 
     print(f"-> Starting transcription for: {video_path.name}")
-
+    print(video_path)
     # 1. Perform Transcription
-    segments_generator, info = model.transcribe(
+    result = model.transcribe(
         str(video_path),
         language=language,
-        vad_filter=True
+        verbose=False,
+        fp16=False
     )
+    # print(result)
+    # # 2. Extract segments from the result
+    # segments = []
+    # for segment in result["segments"]:
+    #     segments.append({
+    #         'start': segment['start'],
+    #         'end': segment['end'],
+    #         'text': segment['text']
+    #     })
 
-    # 2. Convert generator output to the list format expected by utils.py
-    segments = []
-    for segment in segments_generator:
-        segments.append({
-            'start': segment.start,
-            'end': segment.end,
-            'text': segment.text
-        })
+    print(f"-> Transcription complete. Detected language: {result.get('language', 'N/A')}")
 
-    detected_language = info.language if info else "N/A"
-    print(f"-> Transcription complete. Detected language: {detected_language}")
-
-    return {
-        'segments': segments,
-        'language': detected_language
-    }
+    return result

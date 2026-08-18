@@ -1,4 +1,5 @@
 import argparse
+import logging
 import sys
 from pathlib import Path
 import torch
@@ -9,6 +10,7 @@ from config import load_config
 from transcriber import transcribe_video
 
 SRT_FILE_EXTENSIONS = (".srt", ".vtt")
+logger = logging.getLogger(__name__)
 
 
 def format_timestamp(seconds: float) -> str:
@@ -133,13 +135,14 @@ def main():
         print(f"No supported video files found in {input_path} (or its subdirectories).")
         return
 
-    max_workers = min(config['parallel_workers'], len(video_files)) if video_files else 1
+    max_workers = min(config['parallel_workers'], len(video_files))
     print(f"Found {len(video_files)} file(s) for processing. Using {max_workers} worker(s) in parallel.")
 
     # --- 3. Process Files (Parallelized) ---
 
     tasks = [(video_file, config) for video_file in video_files if not subtitle_available(video_file)]
 
+    print(f"{len(tasks)} file(s) left after skipping files with pre-downloaded subs.")
     if max_workers > 1 and config['device'] == 'cuda':
         # Use a Pool to manage worker processes for parallel GPU transcription
         try:
