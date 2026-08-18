@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -10,11 +11,18 @@ import numpy as np
 from subtitlegen.errors import BackendUnavailableError
 from subtitlegen.visual.models import BoundingBox
 
-_ONEDNN_ENV = ("FLAGS_use_mkldnn", "FLAGS_enable_mkldnn")
+logger = logging.getLogger(__name__)
+
+_ONEDNN_ENV = (
+    "FLAGS_use_mkldnn",
+    "FLAGS_enable_mkldnn",
+    "FLAGS_enable_pir_api",
+    "FLAGS_enable_pir_in_executor",
+)
 
 
 def disable_paddle_onednn() -> None:
-    """OneDNN crashes Paddle 3 PIR graph conversion in the Linux OCR image."""
+    """PaddleX defaults CPU detection to OneDNN, which crashes Paddle 3.3 PIR."""
     for flag in _ONEDNN_ENV:
         os.environ[flag] = "0"
     try:
@@ -27,6 +35,22 @@ def disable_paddle_onednn() -> None:
             setter({"FLAGS_use_mkldnn": False})
         except (RuntimeError, TypeError, ValueError):
             return
+
+
+def text_detection_options() -> dict[str, Any]:
+    return {
+        "model_name": "PP-OCRv5_mobile_det",
+        "thresh": 0.3,
+        "box_thresh": 0.5,
+        "unclip_ratio": 2.0,
+        "enable_mkldnn": False,
+        "engine": "paddle_static",
+        "engine_config": {
+            "device_type": "cpu",
+            "run_mode": "paddle",
+            "enable_new_ir": False,
+        },
+    }
 
 
 class TextDetector(Protocol):
@@ -122,10 +146,8 @@ class PaddleOcrDetector:
             try:
                 result = engine.predict(np.asarray(image))
             except NotImplementedError:
-                self.close()
-                disable_paddle_onednn()
-                engine = self._load_engine()
-                result = engine.predict(np.asarray(image))
+                logger.warning("Paddle text detection is unavailable on this runtime")
+                return ()
             return self._boxes_from_payload(result[0] if result else {})
         result = engine.ocr(np.asarray(image), det=True, rec=False, cls=False)
         regions = result[0] if result and len(result) == 1 else result
@@ -142,9 +164,13 @@ class PaddleOcrDetector:
                 batch_size=min(16, len(images)),
             )
         except NotImplementedError:
+            logger.warning("Paddle batch detection fell back after an OneDNN error")
             self.close()
             disable_paddle_onednn()
-            return tuple(self.detect(image) for image in images)
+            try:
+                return tuple(self.detect(image) for image in images)
+            except NotImplementedError:
+                return tuple(() for _ in images)
         return tuple(self._boxes_from_payload(payload) for payload in results)
 
     @staticmethod
@@ -178,21 +204,17 @@ class PaddleOcrDetector:
 
             def factory() -> Any:
                 disable_paddle_onednn()
+                options = text_detection_options()
                 try:
-                    return TextDetection(
-                        model_name="PP-OCRv5_mobile_det",
-                        thresh=0.3,
-                        box_thresh=0.5,
-                        unclip_ratio=2.0,
-                        enable_mkldnn=False,
-                    )
+                    return TextDetection(**options)
                 except TypeError:
-                    return TextDetection(
-                        model_name="PP-OCRv5_mobile_det",
-                        thresh=0.3,
-                        box_thresh=0.5,
-                        unclip_ratio=2.0,
-                    )
+                    options.pop("engine_config", None)
+                    options.pop("engine", None)
+                    try:
+                        return TextDetection(**options)
+                    except TypeError:
+                        options.pop("enable_mkldnn", None)
+                        return TextDetection(**options)
 
         self._engine = factory()
         return self._engine

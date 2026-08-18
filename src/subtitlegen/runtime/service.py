@@ -140,7 +140,6 @@ class RuntimeService:
         return bool(
             data.get("schema_version") == 1
             and data.get("source_sha256") == source_sha256
-            and data.get("output_key") == self._output_key
         )
 
     def _write_output_metadata(self, output_path: Path, source_sha256: str) -> None:

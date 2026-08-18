@@ -5,7 +5,9 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/models/huggingface \
     PADDLE_PDX_CACHE_HOME=/models/paddle \
     FLAGS_use_mkldnn=0 \
-    FLAGS_enable_mkldnn=0
+    FLAGS_enable_mkldnn=0 \
+    FLAGS_enable_pir_api=0 \
+    FLAGS_enable_pir_in_executor=0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg libgl1 \

@@ -445,7 +445,11 @@ class VisualTextPipeline:
             grouped.setdefault(tuple(image.shape), []).append(index)
         results: list[tuple[BoundingBox, ...] | None] = [None] * len(images)
         for indices in grouped.values():
-            detected = detect_batch([images[index] for index in indices])
+            try:
+                detected = detect_batch([images[index] for index in indices])
+            except (NotImplementedError, RuntimeError) as error:
+                logger.warning("text detection skipped a batch: %s", error)
+                detected = tuple(() for _ in indices)
             for index, boxes in zip(indices, detected, strict=True):
                 results[index] = tuple(boxes)
         if any(result is None for result in results):

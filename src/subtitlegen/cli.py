@@ -38,6 +38,7 @@ from subtitlegen.visual.detection import (
     FallbackTextDetector,
     OpenCvDbNetDetector,
     PaddleOcrDetector,
+    disable_paddle_onednn,
 )
 from subtitlegen.visual.merger import SubtitleMerger
 from subtitlegen.visual.ocr import MangaOcrEngine
@@ -204,6 +205,7 @@ def _visual_service(
         frames_per_second=frames_per_second,
         minimum_japanese_characters=minimum_japanese_characters,
     )
+    disable_paddle_onednn()
     paddle = PaddleOcrDetector()
     detector = (
         FallbackTextDetector(OpenCvDbNetDetector(detector_model), paddle)

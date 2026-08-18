@@ -9,6 +9,7 @@ from subtitlegen.visual.detection import (
     OpenCvDbNetDetector,
     PaddleOcrDetector,
     disable_paddle_onednn,
+    text_detection_options,
 )
 from subtitlegen.visual.models import BoundingBox
 
@@ -101,6 +102,12 @@ def test_paddle_detect_batch_retries_after_onednn_crash() -> None:
     assert len(boxes) == 2
     assert boxes[0] == (BoundingBox(2, 3, 7, 7, 0.8),)
     assert factory_calls["count"] == 2
+
+
+def test_text_detection_options_disable_onednn_run_mode() -> None:
+    options = text_detection_options()
+    assert options["enable_mkldnn"] is False
+    assert options["engine_config"]["run_mode"] == "paddle"
 
 
 def test_disable_paddle_onednn_sets_process_flags(monkeypatch: Any) -> None:

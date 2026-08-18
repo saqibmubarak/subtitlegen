@@ -214,6 +214,28 @@ def test_visual_pipeline_detects_before_ocr_caches_and_filters_script(tmp_path: 
         )
 
 
+def test_visual_pipeline_continues_when_batch_detection_crashes(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+
+    class BoomDetector:
+        def detect_batch(self, _images: Any) -> tuple[tuple[BoundingBox, ...], ...]:
+            raise NotImplementedError("onednn")
+
+    events = VisualTextPipeline(
+        FakeSampler(np.zeros((12, 12, 3), dtype=np.uint8)),
+        BoomDetector(),
+        FakeOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        region_proposer=FakeRegionProposer(),
+        minimum_box_area_ratio=0.0,
+        minimum_vertical_center_ratio=0.0,
+        minimum_japanese_characters=1,
+    ).process(media)
+    assert events == ()
+
+
 def test_visual_pipeline_pads_ocr_crops_within_frame_bounds(tmp_path: Path) -> None:
     image = np.zeros((20, 20, 3), dtype=np.uint8)
     ocr = ShapeRecordingOcr()

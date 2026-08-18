@@ -73,6 +73,8 @@ services:
       PYTHONUNBUFFERED: "1"
       FLAGS_use_mkldnn: "0"
       FLAGS_enable_mkldnn: "0"
+      FLAGS_enable_pir_api: "0"
+      FLAGS_enable_pir_in_executor: "0"
     volumes:
       - ${VIDEO_HOST_PATH:-./videos}:/data/videos
       - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models

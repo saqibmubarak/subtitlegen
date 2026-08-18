@@ -100,7 +100,10 @@ def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:
     assert skipped.job_id is not None
 
     changed_rules = _service(tmp_path, backend, output_key="srt-v2")
-    assert changed_rules.process(media, output).status == "resumed"
+    assert changed_rules.process(media, output).status == "skipped"
+    assert backend.calls == 1
+    overwritten = changed_rules.process(media, output, overwrite=True)
+    assert overwritten.status == "resumed"
     assert backend.calls == 1
 
 
