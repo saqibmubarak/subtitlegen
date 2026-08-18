@@ -1,3 +1,10 @@
-venv
+.git
+.idea
+.subtitlegen
+.subtitlegen-docker
+.venv
+__pycache__
+docs
 model_cache
-ReadMe.md
+samples
+tests

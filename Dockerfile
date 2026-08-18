@@ -2,11 +2,18 @@ FROM pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime
 
 WORKDIR /app
 
-RUN apt-get update && yes | apt-get install -y ffmpeg
+ENV PYTHONUNBUFFERED=1 \
+    HF_HOME=/models/huggingface
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY . .
+COPY pyproject.toml ReadMe.md ./
+COPY src ./src
+RUN python -m pip install --no-cache-dir .
 
-CMD ["python", "main.py"]
+COPY config.ini ./
+
+ENTRYPOINT ["subtitlegen"]
+CMD ["generate", "/data/videos", "--cache-dir", "/cache"]

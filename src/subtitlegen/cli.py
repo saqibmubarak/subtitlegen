@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from subtitlegen.cues.builder import CueBuilder
+from subtitlegen.export.srt import SrtWriter
+from subtitlegen.logging import configure_logging
+from subtitlegen.media import discover_media, media_duration
+from subtitlegen.runtime.capabilities import DeviceCapabilities
+from subtitlegen.runtime.executor import GpuResourceToken, StageExecutor
+from subtitlegen.runtime.factory import BackendFactory
+from subtitlegen.runtime.jobs import PortableJobStore
+from subtitlegen.runtime.service import RuntimeService
+from subtitlegen.settings import AppSettings, SettingsLoader
+from subtitlegen.validation import analyze_cues, is_valid_srt, parse_srt
+
+app = typer.Typer(no_args_is_help=True, help="Generate portable, synchronized subtitles.")
+logger = logging.getLogger(__name__)
+
+
+def _service(
+    settings: AppSettings,
+    backend_name: str,
+    cache_dir: Path,
+) -> tuple[RuntimeService, str]:
+    capabilities = DeviceCapabilities.detect()
+    factory = BackendFactory(capabilities)
+    selected = factory.select(backend_name)
+    backend = factory.create(selected, settings.asr)
+    asr_data = (
+        selected,
+        settings.asr.model,
+        settings.asr.device,
+        settings.asr.compute_type,
+        settings.asr.language,
+        settings.asr.beam_size,
+        settings.asr.vad,
+    )
+    asr_hash = hashlib.sha256(repr(asr_data).encode()).hexdigest()[:12]
+    asr_key = f"{selected}-{asr_hash}"
+    output_hash = hashlib.sha256(repr((asr_key, settings.cues)).encode()).hexdigest()[:12]
+    output_key = f"srt-{output_hash}"
+    store = PortableJobStore(cache_dir / "jobs")
+    executor = StageExecutor(store, GpuResourceToken())
+    return (
+        RuntimeService(
+            backend,
+            CueBuilder(settings.cues),
+            SrtWriter(),
+            store,
+            executor,
+            asr_key=asr_key,
+            output_key=output_key,
+        ),
+        selected,
+    )
+
+
+@app.command()
+def generate(
+    input_path: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    config: Annotated[Path, typer.Option("--config")] = Path("config.ini"),
+    backend: Annotated[str, typer.Option("--backend")] = "auto",
+    output_dir: Annotated[Path | None, typer.Option("--output-dir")] = None,
+    cache_dir: Annotated[Path, typer.Option("--cache-dir")] = Path(".subtitlegen"),
+    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose")] = False,
+) -> None:
+    """Generate SRT files recursively, resuming valid cached stages."""
+    configure_logging(verbose)
+    settings = SettingsLoader().load(config)
+    service, selected = _service(settings, backend, cache_dir)
+    videos = discover_media(input_path, settings.video_extensions)
+    if not videos:
+        raise typer.BadParameter("no supported media files were found")
+
+    failures = 0
+    input_root = input_path.resolve()
+    for video in videos:
+        if output_dir is None:
+            output = video.with_suffix(".srt")
+        elif input_root.is_dir():
+            output = output_dir / video.relative_to(input_root).with_suffix(".srt")
+        else:
+            output = output_dir / f"{video.stem}.srt"
+        try:
+            result = service.process(
+                video,
+                output,
+                language=settings.asr.language,
+                overwrite=overwrite,
+            )
+            logger.info("%s: %s using %s", result.status, output, selected)
+        except Exception:
+            failures += 1
+            logger.exception("failed: %s", video)
+    if failures:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def validate(
+    subtitle_path: Annotated[Path, typer.Argument(exists=True, readable=True)],
+) -> None:
+    """Validate an SRT file and print deterministic timing metrics."""
+    if not is_valid_srt(subtitle_path):
+        typer.echo(json.dumps({"valid": False, "path": str(subtitle_path)}))
+        raise typer.Exit(code=1)
+    report = analyze_cues(parse_srt(subtitle_path))
+    typer.echo(json.dumps({"valid": True, **asdict(report)}, sort_keys=True))
+
+
+@app.command()
+def benchmark(
+    media_path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    config: Annotated[Path, typer.Option("--config")] = Path("config.ini"),
+    backend: Annotated[str, typer.Option("--backend")] = "auto",
+    cache_dir: Annotated[Path, typer.Option("--cache-dir")] = Path(".subtitlegen"),
+) -> None:
+    """Measure one media file using the selected local backend."""
+    settings = SettingsLoader().load(config)
+    service, selected = _service(settings, backend, cache_dir)
+    output = cache_dir / "benchmarks" / f"{media_path.stem}-{selected}.srt"
+    started = time.perf_counter()
+    result = service.process(
+        media_path,
+        output,
+        language=settings.asr.language,
+        overwrite=True,
+        refresh_stages=True,
+    )
+    elapsed = time.perf_counter() - started
+    duration = media_duration(media_path)
+    report = analyze_cues(parse_srt(output))
+    typer.echo(
+        json.dumps(
+            {
+                "backend": selected,
+                "elapsed_seconds": elapsed,
+                "media_seconds": duration,
+                "realtime_factor": elapsed / duration if duration else None,
+                "status": result.status,
+                "timing": asdict(report),
+            },
+            sort_keys=True,
+        )
+    )

@@ -1,27 +1,19 @@
 services:
   subtitler:
-    # Build the Docker image using the Dockerfile in the current directory.
     build: .
-
-    # Mount local directories into the container.
-    # Replace the path on the left (`./videos`) with the actual path to your video files.
-    # The right side (`/data/videos`) is the path inside the container.
+    environment:
+      HF_HOME: /models/huggingface
+      PYTHONUNBUFFERED: "1"
     volumes:
-      - .:/data/videos
-      - ./config.ini:/app/config.ini
-      - ./model_cache:/root/.cache/whisper
-
-    # This line enables GPU access for the container.
-    # The `gpus: all` directive makes it work with any available NVIDIA GPU.
+      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
+      - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models
+      - ${JOB_CACHE_HOST_PATH:-./.subtitlegen-docker}:/cache
+      - ./config.ini:/app/config.ini:ro
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              count: 1
               capabilities: [gpu]
-
-    # Command to run the transcription.
-    # It points to the mounted video directory inside the container.
-    # You can change the path argument to a specific file or folder.
-    command: python main.py /data/videos
+    command: ["generate", "/data/videos", "--backend", "faster-whisper", "--cache-dir", "/cache"]

@@ -9,13 +9,20 @@ description = "Cross-platform, extensible video subtitle generation pipeline"
 readme = "ReadMe.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-  "av>=13",
-  "faster-whisper>=1.2,<2",
-  "PyYAML>=6,<7",
-  "typer>=0.16,<1",
+  "av==17.0.1",
+  "ctranslate2==4.7.2",
+  "filelock==3.29.0",
+  "faster-whisper==1.2.1",
+  "numpy==2.4.6",
+  "PyYAML==6.0.3",
+  "typer==0.25.1",
 ]
 
 [project.optional-dependencies]
+cuda = []
+mac = ["mlx-whisper==0.4.3"]
+nemo = []
+ocr = []
 dev = [
   "hypothesis>=6,<7",
   "mypy>=1.17,<2",
@@ -23,6 +30,9 @@ dev = [
   "pytest-cov>=6,<7",
   "ruff>=0.12,<1",
 ]
+
+[project.scripts]
+subtitlegen = "subtitlegen.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -50,7 +60,7 @@ strict = true
 packages = ["subtitlegen"]
 
 [[tool.mypy.overrides]]
-module = ["ctranslate2", "faster_whisper"]
+module = ["av", "ctranslate2", "faster_whisper", "mlx_whisper"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

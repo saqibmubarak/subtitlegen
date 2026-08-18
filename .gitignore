@@ -13,5 +13,6 @@ htmlcov/
 samples/
 model_cache/
 .subtitlegen/
+.subtitlegen-docker/
 *.generated.srt
 *.generated.ass

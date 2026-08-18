@@ -86,7 +86,7 @@ class SettingsLoader:
             max_characters=parser.getint("CUES", "max_characters", fallback=84),
             max_gap_seconds=parser.getfloat("CUES", "max_gap_seconds", fallback=0.9),
             punctuation_flush_min_seconds=parser.getfloat(
-                "CUES", "punctuation_flush_min_seconds", fallback=1.0
+                "CUES", "punctuation_flush_min_seconds", fallback=1.5
             ),
         )
         return AppSettings(

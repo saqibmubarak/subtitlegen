@@ -6,7 +6,7 @@ class CueRules:
     max_duration_seconds: float = 6.0
     max_characters: int = 84
     max_gap_seconds: float = 0.9
-    punctuation_flush_min_seconds: float = 1.0
+    punctuation_flush_min_seconds: float = 1.5
 
     def __post_init__(self) -> None:
         if self.max_duration_seconds <= 0:
