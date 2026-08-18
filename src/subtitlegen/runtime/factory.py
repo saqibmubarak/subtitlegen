@@ -5,6 +5,9 @@ from collections.abc import Callable
 from subtitlegen.asr.base import AsrBackend
 from subtitlegen.asr.faster_whisper import FasterWhisperBackend
 from subtitlegen.asr.mlx_whisper import MlxWhisperBackend
+from subtitlegen.asr.parakeet import ParakeetBackend
+from subtitlegen.asr.whisperx import WhisperXBackend
+from subtitlegen.errors import BackendUnavailableError
 from subtitlegen.runtime.capabilities import DeviceCapabilities
 from subtitlegen.settings import AsrSettings
 
@@ -21,6 +24,8 @@ class BackendFactory:
         self._constructors = constructors or {
             "faster-whisper": FasterWhisperBackend,
             "mlx": MlxWhisperBackend,
+            "parakeet": ParakeetBackend,
+            "whisperx": WhisperXBackend,
         }
 
     def create(self, name: str, settings: AsrSettings) -> AsrBackend:
@@ -37,7 +42,11 @@ class BackendFactory:
             if name == "mlx" and not (
                 self._capabilities.is_apple_silicon and self._capabilities.mlx_available
             ):
-                raise RuntimeError("MLX requires Apple Silicon and the mac optional dependencies")
+                raise BackendUnavailableError(
+                    "MLX requires Apple Silicon and the mac optional dependencies"
+                )
+            if name in {"parakeet", "whisperx"} and not self._capabilities.cuda_devices:
+                raise BackendUnavailableError(f"{name} requires an NVIDIA CUDA device")
             return name
         if self._capabilities.is_apple_silicon and self._capabilities.mlx_available:
             return "mlx"

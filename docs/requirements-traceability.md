@@ -9,7 +9,7 @@
 | Recursive input and skip support | Typer CLI and `RuntimeService` | CLI/service tests |
 | Windows Docker and Mac native | Docker CUDA profile and MLX adapter | [Phase 1 Mac evidence](benchmarks/phase-1-mac.md), Compose validation |
 | Series terminology | Versioned profiles, scoped context, safe normalization | [Phase 2 context evidence](benchmarks/phase-2-context.md), terminology fixture |
-| Interchangeable ASR | Phase 3 backend contracts | Phase 3 adapter suite |
+| Interchangeable ASR | Four normalized adapters and capability-aware presets | shared adapter contracts, [Phase 3 evidence](benchmarks/phase-3-backends.md) |
 | Japanese on-screen translation | Phase 4 visual pipeline | Dressrosa annotations and ASS tests |
 | Resumable intermediates | `PortableJobStore`, `StageExecutor` | job/executor/service tests |
 

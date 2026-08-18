@@ -4,8 +4,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from subtitlegen.asr.capabilities import BackendCapabilities
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.domain.models import Transcription, Word
+from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
 from subtitlegen.media import load_audio_mono
 from subtitlegen.settings import AsrSettings
 
@@ -27,6 +29,15 @@ class MlxWhisperBackend:
         self._transcribe_fn = transcribe_fn
         self._audio_loader = audio_loader
 
+    @property
+    def capabilities(self) -> BackendCapabilities:
+        return BackendCapabilities(
+            word_timestamps=True,
+            context_prompt=True,
+            hotwords=False,
+            requires_cuda=False,
+        )
+
     def transcribe(
         self,
         media_path: Path,
@@ -41,21 +52,28 @@ class MlxWhisperBackend:
             try:
                 import mlx_whisper
             except ImportError as error:
-                raise RuntimeError(
+                raise BackendUnavailableError(
                     "MLX backend is unavailable; install subtitlegen[mac]"
                 ) from error
             transcribe = mlx_whisper.transcribe
 
         audio = self._audio_loader(media_path)
         sample_rate = 16_000
-        result = transcribe(
-            audio,
-            path_or_hf_repo=self._model_repository(self._settings.model),
-            language=language if language is not None else self._settings.language,
-            word_timestamps=True,
-            condition_on_previous_text=context is not None,
-            initial_prompt=context.prompt if context is not None else None,
-        )
+        try:
+            result = transcribe(
+                audio,
+                path_or_hf_repo=self._model_repository(self._settings.model),
+                language=language if language is not None else self._settings.language,
+                word_timestamps=True,
+                condition_on_previous_text=context is not None,
+                initial_prompt=context.prompt if context is not None else None,
+            )
+        except RuntimeError as error:
+            if "out of memory" in str(error).casefold():
+                raise BackendOutOfMemoryError(
+                    "MLX Whisper exhausted memory; use the fast preset or a smaller model"
+                ) from error
+            raise
         words: list[Word] = []
         for segment in result.get("segments", []):
             for item in segment.get("words", []):
@@ -64,10 +82,11 @@ class MlxWhisperBackend:
                 text = str(item.get("word", ""))
                 if start is None or end is None or not text.strip():
                     continue
+                normalized_start = max(0.0, float(start))
                 words.append(
                     Word(
-                        start=max(0.0, float(start)),
-                        end=max(float(start), float(end)),
+                        start=normalized_start,
+                        end=max(normalized_start, float(end)),
                         text=text,
                         probability=item.get("probability"),
                     )
@@ -79,6 +98,9 @@ class MlxWhisperBackend:
             language=str(result.get("language") or language or "unknown"),
             duration=duration,
         )
+
+    def close(self) -> None:
+        """MLX Whisper owns no persistent model object in this adapter."""
 
     @staticmethod
     def _model_repository(model: str) -> str:

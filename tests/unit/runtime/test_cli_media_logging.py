@@ -10,7 +10,9 @@ import subtitlegen.cli as cli_module
 from subtitlegen.cli import app
 from subtitlegen.logging import JsonFormatter
 from subtitlegen.media import discover_media, load_audio_mono, media_duration
+from subtitlegen.runtime.capabilities import DeviceCapabilities
 from subtitlegen.runtime.service import RuntimeResult
+from subtitlegen.settings import AppSettings, AsrSettings
 
 
 class FakeService:
@@ -73,12 +75,19 @@ def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
     duplicate.touch()
     fake = FakeService()
     selected_profiles: list[Any] = []
+    selected_backends: list[str] = []
 
     def fake_service(*args: Any, **_kwargs: Any) -> tuple[FakeService, str]:
         selected_profiles.append(args[3])
+        selected_backends.append(args[1])
         return fake, "fake"
 
     monkeypatch.setattr(cli_module, "_service", fake_service)
+    monkeypatch.setattr(
+        cli_module.DeviceCapabilities,
+        "detect",
+        lambda: DeviceCapabilities("Darwin", "arm64", 0, True),
+    )
     output_dir = tmp_path / "output"
     result = runner.invoke(
         app,
@@ -89,6 +98,8 @@ def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
             str(output_dir),
             "--profile",
             "avatar",
+            "--preset",
+            "quality",
         ],
     )
     assert result.exit_code == 0
@@ -97,6 +108,7 @@ def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
     assert output_dir / "folder with spaces" / "video.srt" in fake.outputs
     assert output_dir / "another folder" / "video.srt" in fake.outputs
     assert selected_profiles[0].profile_id == "avatar"
+    assert selected_backends == ["mlx"]
 
 
 def test_cli_benchmark_outputs_json(monkeypatch: Any, tmp_path: Path) -> None:
@@ -115,3 +127,18 @@ def test_cli_benchmark_outputs_json(monkeypatch: Any, tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert json.loads(result.stdout)["backend"] == "fake"
     assert fake.options[0]["refresh_stages"] is True
+
+
+def test_cli_applies_preset_language_before_execution(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        cli_module.DeviceCapabilities,
+        "detect",
+        lambda: DeviceCapabilities("Linux", "x86_64", 1, False),
+    )
+    settings, backend = cli_module._resolve_runtime(
+        AppSettings(asr=AsrSettings(language="ja")),
+        "auto",
+        "english-fast",
+    )
+    assert backend == "parakeet"
+    assert settings.asr.language == "en"

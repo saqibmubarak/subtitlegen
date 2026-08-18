@@ -2,10 +2,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import ctranslate2
 import pytest
 
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.asr.faster_whisper import FasterWhisperBackend
+from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
 from subtitlegen.settings import AsrSettings
 
 
@@ -73,3 +75,25 @@ def test_backend_rejects_missing_media(tmp_path: Path) -> None:
     backend = FasterWhisperBackend(AsrSettings(device="cpu"), model_factory=FakeModel)
     with pytest.raises(FileNotFoundError):
         backend.transcribe(tmp_path / "missing.mp4")
+
+
+def test_backend_does_not_silently_fallback_from_cuda(monkeypatch: Any) -> None:
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 0)
+    with pytest.raises(BackendUnavailableError, match="no CUDA"):
+        FasterWhisperBackend._resolve_device("cuda")
+
+
+def test_backend_provides_oom_guidance(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+
+    class OomModel:
+        def transcribe(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("out of memory")
+
+    backend = FasterWhisperBackend(
+        AsrSettings(device="cpu"),
+        model_factory=lambda *_args, **_kwargs: OomModel(),
+    )
+    with pytest.raises(BackendOutOfMemoryError, match="smaller model"):
+        backend.transcribe(media)

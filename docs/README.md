@@ -9,8 +9,9 @@ A phased plan for accurate dialogue subtitles, series-aware terminology, and tra
 3. [Upgrade choices](03-upgrade-choices.md)
 4. [Delivery plan and final architecture](04-delivery-plan.md)
 5. [Series profiles](06-series-profiles.md)
-6. [References](05-references.md)
-7. [Requirements traceability](requirements-traceability.md)
+6. [ASR backends and presets](07-asr-backends.md)
+7. [References](05-references.md)
+8. [Requirements traceability](requirements-traceability.md)
 
 ## Target devices
 

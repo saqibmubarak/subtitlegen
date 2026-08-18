@@ -1,0 +1,10 @@
+version: 1
+media: avatar-114-126.wav
+media_sha256: 6d585d0808a1dff23b29e30b028009e5715ea55287b3017571326fa65da22ff5
+language: en
+reference_text: >-
+  As an airbender, it's important that you know when to show restraint.
+  Even if you have the power to win, you are the Avatar.
+  A lot of people...
+phrase_onsets_seconds: [0.82, 6.10, 10.98]
+terms: [airbender, Avatar]

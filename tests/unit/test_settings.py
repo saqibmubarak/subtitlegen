@@ -12,6 +12,8 @@ def test_settings_classes_validate() -> None:
     with pytest.raises(ValueError):
         AsrSettings(model="")
     with pytest.raises(ValueError):
+        AsrSettings(whisperx_batch_size=0)
+    with pytest.raises(ValueError):
         VadSettings(max_speech_duration_s=0)
 
 
@@ -28,6 +30,7 @@ compute_type = int8
 language = None
 parallel_workers = 1
 beam_size = 3
+whisperx_batch_size = 4
 [VAD]
 min_silence_duration_ms = 350
 [CUES]
@@ -43,6 +46,7 @@ video_extensions = .mp4, .webm
     assert settings.asr.model == "large-v3"
     assert settings.asr.language is None
     assert settings.asr.beam_size == 3
+    assert settings.asr.whisperx_batch_size == 4
     assert settings.asr.vad.min_silence_duration_ms == 350
     assert settings.cues.max_duration_seconds == 5
     assert settings.video_extensions == (".mp4", ".webm")

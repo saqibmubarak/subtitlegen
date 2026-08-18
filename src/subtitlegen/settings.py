@@ -27,6 +27,7 @@ class AsrSettings:
     compute_type: str = "auto"
     language: str | None = "en"
     beam_size: int = 5
+    whisperx_batch_size: int = 8
     vad: VadSettings = field(default_factory=VadSettings)
 
     def __post_init__(self) -> None:
@@ -34,6 +35,8 @@ class AsrSettings:
             raise ValueError("ASR model must not be empty")
         if self.beam_size <= 0:
             raise ValueError("beam size must be positive")
+        if self.whisperx_batch_size <= 0:
+            raise ValueError("WhisperX batch size must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +101,11 @@ class SettingsLoader:
                 ).lower(),
                 language=language,
                 beam_size=parser.getint("TRANSCRIPTION", "beam_size", fallback=5),
+                whisperx_batch_size=parser.getint(
+                    "TRANSCRIPTION",
+                    "whisperx_batch_size",
+                    fallback=8,
+                ),
                 vad=vad,
             ),
             cues=cues,

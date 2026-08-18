@@ -19,9 +19,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = []
+cuda = ["whisperx==3.8.6"]
 mac = ["mlx-whisper==0.4.3"]
-nemo = []
+nemo = ["nemo_toolkit[asr]==3.0.0"]
 ocr = []
 dev = [
   "hypothesis>=6,<7",
@@ -64,7 +64,7 @@ strict = true
 packages = ["subtitlegen"]
 
 [[tool.mypy.overrides]]
-module = ["av", "ctranslate2", "faster_whisper", "mlx_whisper"]
+module = ["av", "ctranslate2", "faster_whisper", "mlx_whisper", "nemo.*", "whisperx"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

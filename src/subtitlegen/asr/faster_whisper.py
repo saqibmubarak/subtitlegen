@@ -4,8 +4,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from subtitlegen.asr.capabilities import BackendCapabilities
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.domain.models import Transcription, Word
+from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
 from subtitlegen.settings import AsrSettings
 
 ModelFactory = Callable[..., Any]
@@ -24,6 +26,15 @@ class FasterWhisperBackend:
         self._model_factory = model_factory
         self._model: Any | None = None
 
+    @property
+    def capabilities(self) -> BackendCapabilities:
+        return BackendCapabilities(
+            word_timestamps=True,
+            context_prompt=True,
+            hotwords=True,
+            requires_cuda=False,
+        )
+
     def transcribe(
         self,
         media_path: Path,
@@ -33,33 +44,41 @@ class FasterWhisperBackend:
     ) -> Transcription:
         if not media_path.exists():
             raise FileNotFoundError(media_path)
-        model = self._load_model()
-        segments, info = model.transcribe(
-            str(media_path),
-            language=language if language is not None else self._settings.language,
-            beam_size=self._settings.beam_size,
-            vad_filter=True,
-            vad_parameters={
-                "min_silence_duration_ms": self._settings.vad.min_silence_duration_ms,
-                "speech_pad_ms": self._settings.vad.speech_pad_ms,
-                "max_speech_duration_s": self._settings.vad.max_speech_duration_s,
-            },
-            word_timestamps=True,
-            condition_on_previous_text=False,
-            hallucination_silence_threshold=2.0,
-            initial_prompt=context.prompt if context is not None else None,
-            hotwords=" ".join(context.hotwords) if context is not None else None,
-        )
+        try:
+            model = self._load_model()
+            segments, info = model.transcribe(
+                str(media_path),
+                language=language if language is not None else self._settings.language,
+                beam_size=self._settings.beam_size,
+                vad_filter=True,
+                vad_parameters={
+                    "min_silence_duration_ms": self._settings.vad.min_silence_duration_ms,
+                    "speech_pad_ms": self._settings.vad.speech_pad_ms,
+                    "max_speech_duration_s": self._settings.vad.max_speech_duration_s,
+                },
+                word_timestamps=True,
+                condition_on_previous_text=False,
+                hallucination_silence_threshold=2.0,
+                initial_prompt=context.prompt if context is not None else None,
+                hotwords=" ".join(context.hotwords) if context is not None else None,
+            )
+        except RuntimeError as error:
+            if "out of memory" in str(error).casefold():
+                raise BackendOutOfMemoryError(
+                    "faster-whisper exhausted memory; use a smaller model or CPU int8"
+                ) from error
+            raise
 
         words: list[Word] = []
         for segment in segments:
             for item in segment.words or ():
                 if item.start is None or item.end is None or not item.word.strip():
                     continue
+                start = max(0.0, float(item.start))
                 words.append(
                     Word(
-                        start=max(0.0, float(item.start)),
-                        end=max(float(item.start), float(item.end)),
+                        start=start,
+                        end=max(start, float(item.end)),
                         text=str(item.word),
                         probability=getattr(item, "probability", None),
                     )
@@ -107,5 +126,7 @@ class FasterWhisperBackend:
         except (ImportError, RuntimeError):
             cuda_available = False
         if requested == "cuda" and not cuda_available:
-            return "cpu"
+            raise BackendUnavailableError(
+                "faster-whisper was configured for CUDA, but no CUDA device is available"
+            )
         return "cuda" if cuda_available else "cpu"

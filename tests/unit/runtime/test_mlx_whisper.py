@@ -6,6 +6,7 @@ import pytest
 
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.asr.mlx_whisper import MlxWhisperBackend
+from subtitlegen.errors import BackendOutOfMemoryError
 from subtitlegen.settings import AsrSettings
 
 
@@ -72,3 +73,19 @@ def test_mlx_backend_retains_context_across_windows(tmp_path: Path) -> None:
     assert calls[0]["initial_prompt"] == "Luffy"
     assert calls[0]["condition_on_previous_text"] is True
     assert [word.start for word in result.words] == [0]
+
+
+def test_mlx_backend_provides_oom_guidance(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+
+    def transcribe(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("out of memory")
+
+    backend = MlxWhisperBackend(
+        AsrSettings(),
+        transcribe_fn=transcribe,
+        audio_loader=lambda _path: np.zeros(1, dtype=np.float32),
+    )
+    with pytest.raises(BackendOutOfMemoryError, match="fast preset"):
+        backend.transcribe(media)

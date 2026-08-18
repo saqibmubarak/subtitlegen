@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Annotated
 
@@ -27,6 +27,7 @@ from subtitlegen.runtime.capabilities import DeviceCapabilities
 from subtitlegen.runtime.executor import GpuResourceToken, StageExecutor
 from subtitlegen.runtime.factory import BackendFactory
 from subtitlegen.runtime.jobs import PortableJobStore
+from subtitlegen.runtime.presets import PresetResolver
 from subtitlegen.runtime.service import RuntimeService
 from subtitlegen.settings import AppSettings, SettingsLoader
 from subtitlegen.validation import analyze_cues, is_valid_srt, parse_srt
@@ -72,6 +73,7 @@ def _service(
         settings.asr.compute_type,
         settings.asr.language,
         settings.asr.beam_size,
+        settings.asr.whisperx_batch_size,
         settings.asr.vad,
         context,
     )
@@ -99,11 +101,29 @@ def _service(
     )
 
 
+def _resolve_runtime(
+    settings: AppSettings,
+    backend_name: str,
+    preset: str | None,
+) -> tuple[AppSettings, str]:
+    if preset is None:
+        return settings, backend_name
+    if backend_name != "auto":
+        raise ValueError("--preset cannot be combined with an explicit --backend")
+    resolved = PresetResolver().resolve(
+        preset,
+        DeviceCapabilities.detect(),
+        settings.asr,
+    )
+    return replace(settings, asr=resolved.settings), resolved.backend
+
+
 @app.command()
 def generate(
     input_path: Annotated[Path, typer.Argument(exists=True, readable=True)],
     config: Annotated[Path, typer.Option("--config")] = Path("config.ini"),
     backend: Annotated[str, typer.Option("--backend")] = "auto",
+    preset: Annotated[str | None, typer.Option("--preset")] = None,
     output_dir: Annotated[Path | None, typer.Option("--output-dir")] = None,
     cache_dir: Annotated[Path, typer.Option("--cache-dir")] = Path(".subtitlegen"),
     profile: Annotated[str | None, typer.Option("--profile")] = None,
@@ -117,6 +137,7 @@ def generate(
     """Generate SRT files recursively, resuming valid cached stages."""
     configure_logging(verbose)
     settings = SettingsLoader().load(config)
+    settings, backend = _resolve_runtime(settings, backend, preset)
     series_profile = None
     if profile:
         profile_repository = (
@@ -179,6 +200,7 @@ def benchmark(
     media_path: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
     config: Annotated[Path, typer.Option("--config")] = Path("config.ini"),
     backend: Annotated[str, typer.Option("--backend")] = "auto",
+    preset: Annotated[str | None, typer.Option("--preset")] = None,
     cache_dir: Annotated[Path, typer.Option("--cache-dir")] = Path(".subtitlegen"),
     profile: Annotated[str | None, typer.Option("--profile")] = None,
     profiles_dir: Annotated[Path | None, typer.Option("--profiles-dir")] = None,
@@ -188,6 +210,7 @@ def benchmark(
 ) -> None:
     """Measure one media file using the selected local backend."""
     settings = SettingsLoader().load(config)
+    settings, backend = _resolve_runtime(settings, backend, preset)
     series_profile = None
     if profile:
         profile_repository = (
