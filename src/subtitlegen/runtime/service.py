@@ -126,6 +126,9 @@ class RuntimeService:
         )
         return RuntimeResult(status, output_path, manifest.job_id)
 
+    def set_cue_processor(self, cue_processor: CueProcessor | None) -> None:
+        self._cue_processor = cue_processor
+
     def close(self) -> None:
         self._backend.close()
 

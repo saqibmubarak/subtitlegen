@@ -68,6 +68,17 @@ def test_service_releases_backend(tmp_path: Path) -> None:
     assert backend.closed
 
 
+def test_service_can_replace_cue_processor(tmp_path: Path) -> None:
+    class Marker:
+        def process(self, cues: Any) -> Any:
+            return list(cues)
+
+    service = _service(tmp_path, FakeBackend())
+    processor = Marker()
+    service.set_cue_processor(processor)
+    assert service._cue_processor is processor
+
+
 def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:
     media = tmp_path / "video.mp4"
     media.write_bytes(b"media")

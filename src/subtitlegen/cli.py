@@ -20,9 +20,11 @@ from subtitlegen.profiles.correction import (
     ConservativeLocalCorrector,
 )
 from subtitlegen.profiles.cue_processor import ProfileCueProcessor
+from subtitlegen.profiles.extraction import LocalTranscriptExtractor
 from subtitlegen.profiles.models import SeriesProfile
 from subtitlegen.profiles.normalizer import GlossaryNormalizer
 from subtitlegen.profiles.repository import ProfileRepository
+from subtitlegen.profiles.resolver import ProfileResolver, ResolvedProfile
 from subtitlegen.profiles.selector import ContextSelector
 from subtitlegen.runtime.capabilities import DeviceCapabilities
 from subtitlegen.runtime.executor import GpuResourceToken, StageExecutor
@@ -70,14 +72,8 @@ def _service(
         if profile is not None
         else None
     )
-    normalizer = GlossaryNormalizer()
-    gated_corrector = (
-        ConfidenceGatedCorrector(normalizer, ConservativeLocalCorrector())
-        if profile is not None and local_correction
-        else None
-    )
     cue_processor = (
-        ProfileCueProcessor(profile, normalizer, gated_corrector)
+        _cue_processor(profile, local_correction=local_correction)
         if profile is not None
         else None
     )
@@ -90,7 +86,9 @@ def _service(
         settings.asr.beam_size,
         settings.asr.whisperx_batch_size,
         settings.asr.vad,
-        context,
+        profile.profile_id if profile is not None else None,
+        arc,
+        episode,
     )
     asr_hash = hashlib.sha256(repr(asr_data).encode()).hexdigest()[:12]
     asr_key = f"{selected}-{asr_hash}"
@@ -131,6 +129,68 @@ def _resolve_runtime(
         settings.asr,
     )
     return replace(settings, asr=resolved.settings), resolved.backend
+
+
+def _shipped_repository(profiles_dir: Path | None) -> ProfileRepository | None:
+    if profiles_dir is not None:
+        return ProfileRepository(profiles_dir)
+    try:
+        return ProfileRepository.default()
+    except FileNotFoundError:
+        return None
+
+
+def _resolve_profile(
+    paths: tuple[Path, ...],
+    cache_dir: Path,
+    profile: str | None,
+    profiles_dir: Path | None,
+    *,
+    auto: bool,
+) -> ResolvedProfile:
+    shipped = _shipped_repository(profiles_dir)
+    return ProfileResolver(
+        cache=ProfileRepository(cache_dir / "profiles"),
+        shipped=shipped,
+    ).resolve(
+        paths,
+        explicit_id=profile,
+        auto=auto,
+        explicit_repository=shipped,
+    )
+
+
+def _cue_processor(
+    profile: SeriesProfile,
+    *,
+    local_correction: bool,
+) -> ProfileCueProcessor:
+    normalizer = GlossaryNormalizer()
+    corrector = (
+        ConfidenceGatedCorrector(normalizer, ConservativeLocalCorrector())
+        if local_correction
+        else None
+    )
+    return ProfileCueProcessor(profile, normalizer, corrector)
+
+
+def _enrich_profile(
+    profile: SeriesProfile,
+    output_path: Path,
+    cache: ProfileRepository,
+    service: RuntimeService,
+    *,
+    local_correction: bool,
+) -> SeriesProfile:
+    cues = parse_srt(output_path)
+    updated = LocalTranscriptExtractor().enrich(profile, cues)
+    if updated.terms == profile.terms:
+        return profile
+    cache.save(updated)
+    processor = _cue_processor(updated, local_correction=local_correction)
+    SrtWriter().write(processor.process(cues), output_path)
+    service.set_cue_processor(processor)
+    return updated
 
 
 def _visual_service(
@@ -219,8 +279,15 @@ def generate(
     profiles_dir: Annotated[Path | None, typer.Option("--profiles-dir")] = None,
     arc: Annotated[str | None, typer.Option("--arc")] = None,
     episode: Annotated[str | None, typer.Option("--episode")] = None,
-    local_correction: Annotated[bool, typer.Option("--local-correction")] = False,
-    visual_text: Annotated[bool, typer.Option("--visual-text")] = False,
+    auto_profile: Annotated[bool, typer.Option("--auto-profile/--no-auto-profile")] = True,
+    local_correction: Annotated[
+        bool,
+        typer.Option("--local-correction/--no-local-correction"),
+    ] = True,
+    visual_text: Annotated[
+        bool | None,
+        typer.Option("--visual-text/--no-visual-text"),
+    ] = None,
     visual_fps: Annotated[float, typer.Option("--visual-fps")] = 1.5,
     visual_min_japanese_characters: Annotated[
         int,
@@ -234,26 +301,30 @@ def generate(
     configure_logging(verbose)
     settings = SettingsLoader().load(config)
     settings, backend = _resolve_runtime(settings, backend, preset)
-    series_profile = None
-    if profile:
-        profile_repository = (
-            ProfileRepository(profiles_dir)
-            if profiles_dir is not None
-            else ProfileRepository.default()
-        )
-        series_profile = profile_repository.load(profile)
+    videos = discover_media(input_path, settings.video_extensions)
+    if not videos:
+        raise typer.BadParameter("no supported media files were found")
+    resolved = _resolve_profile(
+        (input_path, *videos[:3]),
+        cache_dir,
+        profile,
+        profiles_dir,
+        auto=auto_profile,
+    )
+    series_profile = resolved.profile
+    scoped = resolved.identity if not input_path.is_dir() else None
+    selected_arc = arc or (scoped.arc if scoped is not None else None)
+    selected_episode = episode or (scoped.episode if scoped is not None else None)
+    use_visual = resolved.enable_visual if visual_text is None else visual_text
     service, selected = _service(
         settings,
         backend,
         cache_dir,
         series_profile,
-        arc=arc,
-        episode=episode,
+        arc=selected_arc,
+        episode=selected_episode,
         local_correction=local_correction,
     )
-    videos = discover_media(input_path, settings.video_extensions)
-    if not videos:
-        raise typer.BadParameter("no supported media files were found")
 
     failures = 0
     generated: list[tuple[Path, Path]] = []
@@ -274,6 +345,14 @@ def generate(
                     overwrite=overwrite,
                 )
                 generated.append((video, output))
+                if series_profile is not None and auto_profile and result.status != "skipped":
+                    series_profile = _enrich_profile(
+                        series_profile,
+                        output,
+                        ProfileRepository(cache_dir / "profiles"),
+                        service,
+                        local_correction=local_correction,
+                    )
                 logger.info("%s: %s using %s", result.status, output, selected)
             except Exception:
                 failures += 1
@@ -283,13 +362,13 @@ def generate(
         if close is not None:
             close()
 
-    if visual_text:
+    if use_visual:
         multimodal = _visual_service(
             series_profile,
             detector_model,
             cache_dir,
             visual_fps,
-                visual_min_japanese_characters,
+            visual_min_japanese_characters,
         )
         try:
             for video, dialogue_output in generated:
@@ -336,26 +415,34 @@ def benchmark(
     profiles_dir: Annotated[Path | None, typer.Option("--profiles-dir")] = None,
     arc: Annotated[str | None, typer.Option("--arc")] = None,
     episode: Annotated[str | None, typer.Option("--episode")] = None,
-    local_correction: Annotated[bool, typer.Option("--local-correction")] = False,
+    auto_profile: Annotated[bool, typer.Option("--auto-profile/--no-auto-profile")] = True,
+    local_correction: Annotated[
+        bool,
+        typer.Option("--local-correction/--no-local-correction"),
+    ] = True,
 ) -> None:
     """Measure one media file using the selected local backend."""
     settings = SettingsLoader().load(config)
     settings, backend = _resolve_runtime(settings, backend, preset)
-    series_profile = None
-    if profile:
-        profile_repository = (
-            ProfileRepository(profiles_dir)
-            if profiles_dir is not None
-            else ProfileRepository.default()
-        )
-        series_profile = profile_repository.load(profile)
+    resolved = _resolve_profile(
+        (media_path,),
+        cache_dir,
+        profile,
+        profiles_dir,
+        auto=auto_profile,
+    )
+    series_profile = resolved.profile
+    selected_arc = arc or (resolved.identity.arc if resolved.identity is not None else None)
+    selected_episode = episode or (
+        resolved.identity.episode if resolved.identity is not None else None
+    )
     service, selected = _service(
         settings,
         backend,
         cache_dir,
         series_profile,
-        arc=arc,
-        episode=episode,
+        arc=selected_arc,
+        episode=selected_episode,
         local_correction=local_correction,
     )
     output = cache_dir / "benchmarks" / f"{media_path.stem}-{selected}.srt"

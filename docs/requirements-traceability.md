@@ -3,7 +3,7 @@
 | ID | Requirement | Implementation | Automated/manual evidence |
 |---|---|---|---|
 | F1 | Synchronized English dialogue | Normalized word timestamps and `CueBuilder` | cue properties, backend contracts, [Phase 0](benchmarks/phase-0-mac.md) |
-| F2 | Reusable series terminology | Profiles, scoped context, normalization, gated correction | profile suites, [Phase 2](benchmarks/phase-2-context.md) |
+| F2 | Reusable series terminology | Auto profile from path (shipped/cache/Wikipedia/search/transcript), scoped context, normalization, gated correction | profile suites, [Phase 2](benchmarks/phase-2-context.md) |
 | F3 | Japanese visual translation | Temporal proposals, Paddle/DBNet, Manga OCR, local translator, tracker | visual suites, [Phase 4](benchmarks/phase-4-visual.md) |
 | F4 | Styled ASS and dialogue SRT | `SubtitleMerger`, `AssWriter`, `SrtWriter` | ASS/SRT golden and round-trip tests |
 | F5 | File/recursive batch and valid-output skip | Typer CLI, discovery, output metadata | paths-with-spaces, duplicate-stem, skip/overwrite tests |

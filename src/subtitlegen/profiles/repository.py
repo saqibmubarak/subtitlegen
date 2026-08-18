@@ -29,7 +29,50 @@ class ProfileRepository:
             raise RuntimeError(f"invalid series profile: {path}") from error
 
     def available(self) -> tuple[str, ...]:
+        if not self._root.is_dir():
+            return ()
         return tuple(sorted(path.stem for path in self._root.glob("*.yaml") if path.is_file()))
+
+    def save(self, profile: SeriesProfile) -> Path:
+        self._root.mkdir(parents=True, exist_ok=True)
+        path = self._root / f"{profile.profile_id}.yaml"
+        path.write_text(
+            yaml.safe_dump(self.encode(profile), allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        return path
+
+    @staticmethod
+    def encode(profile: SeriesProfile) -> dict[str, object]:
+        terms: list[dict[str, object]] = []
+        for entry in profile.terms:
+            item: dict[str, object] = {
+                "canonical": entry.canonical,
+                "category": entry.category,
+            }
+            if entry.aliases:
+                item["aliases"] = list(entry.aliases)
+            if entry.arcs:
+                item["arcs"] = list(entry.arcs)
+            if entry.episodes:
+                item["episodes"] = list(entry.episodes)
+            if not entry.normalize_aliases:
+                item["normalize_aliases"] = False
+            if not entry.normalize_canonical:
+                item["normalize_canonical"] = False
+            terms.append(item)
+        payload: dict[str, object] = {
+            "schema_version": profile.schema_version,
+            "profile_id": profile.profile_id,
+            "title": profile.title,
+            "language": profile.language,
+            "terms": terms,
+        }
+        if profile.visual_translations:
+            payload["visual_translations"] = {
+                source: target for source, target in profile.visual_translations
+            }
+        return payload
 
     @classmethod
     def default(cls, search_roots: tuple[Path, ...] | None = None) -> ProfileRepository:

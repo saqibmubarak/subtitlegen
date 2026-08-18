@@ -1,14 +1,12 @@
 # Japanese visual text
 
-`--visual-text` adds translated Japanese on-screen text to the generated
-dialogue subtitles and writes an ASS file beside the dialogue-only SRT.
+Japanese on-screen translation starts automatically when the resolved series
+looks like anime (or a shipped profile already has visual translations). Use
+`--no-visual-text` to skip it, or `--visual-text` to force it.
 
 ```bash
-subtitlegen generate episode.mp4 \
-  --profile one-piece \
-  --arc Dressrosa \
-  --visual-text \
-  --visual-fps 1.5
+subtitlegen generate episode.mp4
+subtitlegen generate episode.mp4 --no-visual-text --visual-fps 1.5
 ```
 
 The sampling rate accepts values from 1 through 2 fps. Scene changes are sampled

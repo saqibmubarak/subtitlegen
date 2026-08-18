@@ -26,6 +26,7 @@ ASS contains `Dialogue` and `OnScreen` styles. Intermediate audio, word timestam
 | 3 | WhisperX/Parakeet evaluation and selectable backends | Phase 2 | Device benchmark selects presets |
 | 4 | Japanese visual-text pipeline and ASS merge | Phase 2 | One Piece sample passes review |
 | 5 | Packaging, tests, documentation | 0–4 | Out-of-box acceptance passes |
+| 6 | Automatic series profiles from a file or directory path | 2, 5 | Path inference, Wikipedia/search builder, transcript enrichment, and CLI auto-visual tests pass |
 
 ## Parallelization
 
@@ -58,8 +59,8 @@ This maximizes throughput without duplicating model memory. Actual batch sizes a
 Target CLI:
 
 ```bash
-docker compose run --rm subtitler generate /data/videos --profile one-piece --preset quality
-subtitlegen generate ./videos --profile avatar --preset quality
+docker compose run --rm subtitler generate /data/videos --preset quality
+subtitlegen generate ./videos
 ```
 
 ## Presets

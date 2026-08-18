@@ -27,13 +27,18 @@ The image uses one GPU, a persistent Hugging Face model cache, a resumable job c
 ## Commands
 
 ```bash
-subtitlegen generate VIDEO_OR_DIRECTORY [--backend auto] [--overwrite]
+subtitlegen generate VIDEO_OR_DIRECTORY
 subtitlegen generate VIDEO_OR_DIRECTORY --preset fast|quality|english-fast
 subtitlegen generate VIDEO --profile one-piece --arc Dressrosa
-subtitlegen generate VIDEO --profile one-piece --visual-text --visual-fps 1.5
+subtitlegen generate VIDEO --no-visual-text
 subtitlegen validate SUBTITLE.srt
 subtitlegen benchmark VIDEO [--backend auto]
 ```
+
+Give a file or directory. The CLI infers the series name, builds or reuses a
+glossary (shipped YAML, cache, Wikipedia/search, then local transcript mining),
+applies gated spelling correction, and runs Japanese on-screen translation when
+the series looks like anime.
 
 Configuration defaults are in `config.ini`. First use may download a model; cached runs can operate offline.
 See [ASR backends and presets](docs/07-asr-backends.md) for optional CUDA adapters.

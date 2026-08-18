@@ -24,7 +24,7 @@ Models download on first use. To keep all caches under the checkout:
 export HF_HOME="$PWD/model_cache/huggingface"
 export PADDLE_PDX_CACHE_HOME="$PWD/model_cache/paddle"
 subtitlegen generate "/path/with spaces/episode.mp4" \
-  --preset quality --profile one-piece --visual-text
+  --preset quality
 ```
 
 The dialogue-only SRT and combined ASS are written beside the video unless

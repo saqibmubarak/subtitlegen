@@ -10,6 +10,8 @@ import subtitlegen.cli as cli_module
 from subtitlegen.cli import app
 from subtitlegen.logging import JsonFormatter
 from subtitlegen.media import discover_media, load_audio_mono, media_duration
+from subtitlegen.profiles.models import SeriesProfile
+from subtitlegen.profiles.repository import ProfileRepository
 from subtitlegen.runtime.capabilities import DeviceCapabilities
 from subtitlegen.runtime.service import RuntimeResult
 from subtitlegen.settings import AppSettings, AsrSettings
@@ -224,6 +226,129 @@ def test_cli_visual_text_runs_after_dialogue_and_writes_ass(
     assert result.exit_code == 0
     assert multimodal.outputs == [video.with_suffix(".ass")]
     assert multimodal.closed
+
+
+def test_cli_auto_profile_uses_shipped_match_and_skips_visual_for_avatar(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "Avatar - S01E01 - The Boy in the Iceberg.mp4"
+    video.touch()
+    fake = FakeService()
+    selected_profiles: list[Any] = []
+
+    def fake_service(*args: Any, **_kwargs: Any) -> tuple[FakeService, str]:
+        selected_profiles.append(args[3])
+        return fake, "fake"
+
+    monkeypatch.setattr(cli_module, "_service", fake_service)
+    monkeypatch.setattr(
+        cli_module,
+        "_visual_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("visual")),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["generate", str(video), "--cache-dir", str(tmp_path / "cache")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert selected_profiles[0].profile_id == "avatar"
+    assert fake.closed
+
+
+def test_cli_auto_profile_enables_visual_when_resolver_requests_it(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "Made Up Series - S01E02.mp4"
+    video.touch()
+    fake = FakeService()
+    from subtitlegen.profiles.identity import MediaIdentity
+    from subtitlegen.profiles.models import GlossaryEntry, SeriesProfile
+    from subtitlegen.profiles.resolver import ResolvedProfile
+
+    profile = SeriesProfile(
+        1,
+        "made-up-series",
+        "Made Up Series",
+        "en",
+        (GlossaryEntry("Hero"),),
+    )
+
+    class FakeMultimodal:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def process(self, _video: Path, _dialogue: Path, output: Path) -> MultimodalResult:
+            output.write_text("ASS", encoding="utf-8")
+            return MultimodalResult(output, 1, 1)
+
+        def close(self) -> None:
+            self.closed = True
+
+    multimodal = FakeMultimodal()
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_profile",
+        lambda *_args, **_kwargs: ResolvedProfile(
+            profile,
+            MediaIdentity("Made Up Series", "made-up-series", episode="2"),
+            "wikipedia",
+            True,
+        ),
+    )
+    monkeypatch.setattr(cli_module, "_service", lambda *_args, **_kwargs: (fake, "fake"))
+    monkeypatch.setattr(cli_module, "_visual_service", lambda *_args, **_kwargs: multimodal)
+
+    result = CliRunner().invoke(
+        app,
+        ["generate", str(video), "--cache-dir", str(tmp_path / "cache")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert multimodal.closed
+    assert video.with_suffix(".ass").is_file()
+
+
+def test_enrich_profile_adds_repeated_names_and_replaces_processor(tmp_path: Path) -> None:
+    output = tmp_path / "out.srt"
+    output.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nAang meets Katara\n\n"
+        "2\n00:00:01,000 --> 00:00:02,000\nAang and Katara leave\n",
+        encoding="utf-8",
+    )
+
+    class Service:
+        def __init__(self) -> None:
+            self.processor: Any = None
+
+        def set_cue_processor(self, processor: Any) -> None:
+            self.processor = processor
+
+    service = Service()
+    updated = cli_module._enrich_profile(
+        SeriesProfile(1, "avatar", "Avatar", "en", ()),
+        output,
+        ProfileRepository(tmp_path / "profiles"),
+        service,  # type: ignore[arg-type]
+        local_correction=True,
+    )
+    names = {entry.canonical for entry in updated.terms}
+    assert {"Aang", "Katara"} <= names
+    assert service.processor is not None
+    assert (tmp_path / "profiles" / "avatar.yaml").is_file()
+
+
+def test_shipped_repository_returns_none_when_missing(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        cli_module.ProfileRepository,
+        "default",
+        classmethod(lambda cls: (_ for _ in ()).throw(FileNotFoundError("missing"))),
+    )
+    assert cli_module._shipped_repository(None) is None
+    assert cli_module._shipped_repository(tmp_path) is not None
 
 
 def test_visual_service_uses_fps_for_sampling_timing_and_cache(tmp_path: Path) -> None:

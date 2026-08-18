@@ -3,7 +3,7 @@
 ## Functional
 
 1. Generate synchronized dialogue subtitles from English-dubbed video.
-2. Preserve series terminology and proper nouns through reusable profiles.
+2. Preserve series terminology and proper nouns through reusable profiles that are created automatically from the input path.
 3. Detect Japanese on-screen text, translate it, and distinguish it from dialogue.
 4. Export **ASS** as the primary format and dialogue-only **SRT** as an option.
 5. Process a file or recursively process a directory while skipping valid outputs.
