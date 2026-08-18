@@ -69,7 +69,8 @@ subtitlegen generate ./videos --profile avatar --preset quality
 | `fast` | large-v3-turbo word cues | Drafts |
 | `quality` | large-v3 + optional WhisperX | General final subtitles |
 | `english-fast` | Parakeet if benchmark-approved | English-dub batches |
-| `mac-quality` | MLX large-v3 | Native M4 processing |
+
+On Apple Silicon, `quality` resolves to MLX large-v3; there is no separate `mac-quality` preset.
 
 ## Final acceptance
 
