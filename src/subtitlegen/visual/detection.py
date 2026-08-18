@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -8,6 +9,24 @@ import numpy as np
 
 from subtitlegen.errors import BackendUnavailableError
 from subtitlegen.visual.models import BoundingBox
+
+_ONEDNN_ENV = ("FLAGS_use_mkldnn", "FLAGS_enable_mkldnn")
+
+
+def disable_paddle_onednn() -> None:
+    """OneDNN crashes Paddle 3 PIR graph conversion in the Linux OCR image."""
+    for flag in _ONEDNN_ENV:
+        os.environ[flag] = "0"
+    try:
+        import paddle
+    except ImportError:
+        return
+    setter = getattr(paddle, "set_flags", None)
+    if setter is not None:
+        try:
+            setter({"FLAGS_use_mkldnn": False})
+        except (RuntimeError, TypeError, ValueError):
+            return
 
 
 class TextDetector(Protocol):
@@ -100,22 +119,32 @@ class PaddleOcrDetector:
     def detect(self, image: Any) -> tuple[BoundingBox, ...]:
         engine = self._load_engine()
         if hasattr(engine, "predict"):
-            result = engine.predict(np.asarray(image))
+            try:
+                result = engine.predict(np.asarray(image))
+            except NotImplementedError:
+                self.close()
+                disable_paddle_onednn()
+                engine = self._load_engine()
+                result = engine.predict(np.asarray(image))
             return self._boxes_from_payload(result[0] if result else {})
-        else:
-            result = engine.ocr(np.asarray(image), det=True, rec=False, cls=False)
-            regions = result[0] if result and len(result) == 1 else result
-            confidences = [1.0] * len(regions or ())
-            return self._boxes(regions or (), confidences)
+        result = engine.ocr(np.asarray(image), det=True, rec=False, cls=False)
+        regions = result[0] if result and len(result) == 1 else result
+        confidences = [1.0] * len(regions or ())
+        return self._boxes(regions or (), confidences)
 
     def detect_batch(self, images: Sequence[Any]) -> tuple[tuple[BoundingBox, ...], ...]:
         engine = self._load_engine()
         if not hasattr(engine, "predict"):
             return tuple(self.detect(image) for image in images)
-        results = engine.predict(
-            [np.asarray(image) for image in images],
-            batch_size=min(16, len(images)),
-        )
+        try:
+            results = engine.predict(
+                [np.asarray(image) for image in images],
+                batch_size=min(16, len(images)),
+            )
+        except NotImplementedError:
+            self.close()
+            disable_paddle_onednn()
+            return tuple(self.detect(image) for image in images)
         return tuple(self._boxes_from_payload(payload) for payload in results)
 
     @staticmethod
@@ -148,12 +177,22 @@ class PaddleOcrDetector:
                 ) from error
 
             def factory() -> Any:
-                return TextDetection(
-                    model_name="PP-OCRv5_mobile_det",
-                    thresh=0.3,
-                    box_thresh=0.5,
-                    unclip_ratio=2.0,
-                )
+                disable_paddle_onednn()
+                try:
+                    return TextDetection(
+                        model_name="PP-OCRv5_mobile_det",
+                        thresh=0.3,
+                        box_thresh=0.5,
+                        unclip_ratio=2.0,
+                        enable_mkldnn=False,
+                    )
+                except TypeError:
+                    return TextDetection(
+                        model_name="PP-OCRv5_mobile_det",
+                        thresh=0.3,
+                        box_thresh=0.5,
+                        unclip_ratio=2.0,
+                    )
 
         self._engine = factory()
         return self._engine

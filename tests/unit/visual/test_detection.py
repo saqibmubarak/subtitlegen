@@ -8,6 +8,7 @@ from subtitlegen.visual.detection import (
     FallbackTextDetector,
     OpenCvDbNetDetector,
     PaddleOcrDetector,
+    disable_paddle_onednn,
 )
 from subtitlegen.visual.models import BoundingBox
 
@@ -71,6 +72,48 @@ def test_dbnet_detector_configures_filters_normalizes_and_releases(tmp_path: Pat
         OpenCvDbNetDetector(tmp_path / "model", confidence_threshold=0)
     with pytest.raises(FileNotFoundError):
         OpenCvDbNetDetector(tmp_path / "missing")
+
+
+def test_paddle_detect_batch_retries_after_onednn_crash() -> None:
+    class FlakyPaddle:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, images: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+            self.calls += 1
+            if isinstance(images, list) and len(images) > 1:
+                raise NotImplementedError("ConvertPirAttribute2RuntimeAttribute onednn")
+            return [
+                {
+                    "dt_polys": [np.array([[2, 3], [8, 3], [8, 9], [2, 9]])],
+                    "dt_scores": [0.8],
+                }
+            ]
+
+    factory_calls = {"count": 0}
+
+    def factory() -> FlakyPaddle:
+        factory_calls["count"] += 1
+        return FlakyPaddle()
+
+    detector = PaddleOcrDetector(engine_factory=factory)
+    boxes = detector.detect_batch([np.zeros((10, 10)), np.zeros((10, 10))])
+    assert len(boxes) == 2
+    assert boxes[0] == (BoundingBox(2, 3, 7, 7, 0.8),)
+    assert factory_calls["count"] == 2
+
+
+def test_disable_paddle_onednn_sets_process_flags(monkeypatch: Any) -> None:
+    seen: dict[str, object] = {}
+
+    class FakePaddle:
+        @staticmethod
+        def set_flags(flags: dict[str, bool]) -> None:
+            seen.update(flags)
+
+    monkeypatch.setitem(__import__("sys").modules, "paddle", FakePaddle)
+    disable_paddle_onednn()
+    assert seen["FLAGS_use_mkldnn"] is False
 
 
 def test_paddle_detector_and_fallback_contract() -> None:

@@ -225,6 +225,35 @@ def test_resolver_prefers_shipped_then_cache_then_builder(tmp_path: Path) -> Non
     assert cached.profile.terms[0].canonical == "Hero"
 
 
+def test_resolver_maps_glossary_tokens_to_any_series_profile(tmp_path: Path) -> None:
+    shipped = ProfileRepository(Path("profiles"))
+    cache = ProfileRepository(tmp_path / "cache")
+
+    class ExplodingBuilder:
+        def build(self, identity: MediaIdentity) -> None:
+            raise AssertionError(f"should not build {identity.title}")
+
+    dressrosa = tmp_path / "[Group] Dressrosa 24.mp4"
+    dressrosa.touch()
+    one_piece = ProfileResolver(cache, shipped, builder=ExplodingBuilder()).resolve(
+        (dressrosa,)
+    )  # type: ignore[arg-type]
+    assert one_piece.profile is not None
+    assert one_piece.profile.profile_id == "one-piece"
+    assert one_piece.identity is not None
+    assert one_piece.identity.arc == "Dressrosa"
+
+    ba_sing_se = tmp_path / "Ba Sing Se - S02E14.mp4"
+    ba_sing_se.touch()
+    avatar = ProfileResolver(cache, shipped, builder=ExplodingBuilder()).resolve(
+        (ba_sing_se,)
+    )  # type: ignore[arg-type]
+    assert avatar.profile is not None
+    assert avatar.profile.profile_id == "avatar"
+    assert avatar.identity is not None
+    assert avatar.identity.title == "Avatar"
+
+
 def test_resolver_builds_and_writes_cache(tmp_path: Path) -> None:
     cache = ProfileRepository(tmp_path / "cache")
     video = tmp_path / "Made Up Series - S01E01.mkv"

@@ -56,7 +56,7 @@ class ProfileResolver:
         identity = self._infer(paths)
         if identity is None:
             return ResolvedProfile(None, None, "none", False)
-        shipped = self._load_matching(self._shipped, identity)
+        shipped, identity = self._load_matching(self._shipped, identity)
         if shipped is not None:
             return ResolvedProfile(
                 shipped,
@@ -64,7 +64,7 @@ class ProfileResolver:
                 "shipped",
                 enable_visual=bool(shipped.visual_translations),
             )
-        cached = self._load_matching(self._cache, identity)
+        cached, identity = self._load_matching(self._cache, identity)
         if cached is not None:
             return ResolvedProfile(
                 cached,
@@ -101,20 +101,33 @@ class ProfileResolver:
     def _load_matching(
         repository: ProfileRepository | None,
         identity: MediaIdentity,
-    ) -> SeriesProfile | None:
+    ) -> tuple[SeriesProfile | None, MediaIdentity]:
         if repository is None:
-            return None
+            return None, identity
         try:
             available = repository.available()
         except OSError:
-            return None
+            return None, identity
         if identity.profile_id in available:
-            return repository.load(identity.profile_id)
+            return repository.load(identity.profile_id), identity
         for profile_id in available:
             profile = repository.load(profile_id)
             if ProfileResolver._titles_match(identity.title, profile.title):
-                return profile
-        return None
+                return profile, identity
+            arc = ProfileResolver._term_match(profile, identity)
+            if arc is not None:
+                logger.info(
+                    "mapped '%s' to series profile %s",
+                    identity.title,
+                    profile.profile_id,
+                )
+                return profile, MediaIdentity(
+                    title=profile.title,
+                    profile_id=profile.profile_id,
+                    arc=identity.arc or arc,
+                    episode=identity.episode,
+                )
+        return None, identity
 
     @staticmethod
     def _titles_match(inferred: str, known: str) -> bool:
@@ -124,3 +137,20 @@ class ProfileResolver:
             return True
         shorter, longer = sorted((left, right), key=len)
         return len(shorter) >= 5 and shorter in longer
+
+    @staticmethod
+    def _term_match(profile: SeriesProfile, identity: MediaIdentity) -> str | None:
+        """Match a file or folder token to any glossary place, person, or term."""
+        needles = {
+            token
+            for token in (identity.title, identity.arc, identity.profile_id)
+            if token and len(token) >= 4
+        }
+        if not needles:
+            return None
+        folded = {token.casefold() for token in needles}
+        for entry in profile.terms:
+            spellings = {entry.canonical.casefold(), *(alias.casefold() for alias in entry.aliases)}
+            if folded & spellings:
+                return entry.canonical
+        return None

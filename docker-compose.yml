@@ -71,6 +71,8 @@ services:
       HF_HOME: /models/huggingface
       PADDLE_PDX_CACHE_HOME: /models/paddle
       PYTHONUNBUFFERED: "1"
+      FLAGS_use_mkldnn: "0"
+      FLAGS_enable_mkldnn: "0"
     volumes:
       - ${VIDEO_HOST_PATH:-./videos}:/data/videos
       - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models

@@ -44,6 +44,15 @@ def test_inferencer_uses_parent_folder_and_ignores_junk_names(tmp_path: Path) ->
     assert inferencer.infer(tmp_path / "test_cli_case" / "clip.mp4") is None
 
 
+def test_inferencer_reads_group_tagged_arc_episode(tmp_path: Path) -> None:
+    video = tmp_path / "[Muhn Pace] Dressrosa 24.mp4"
+    video.touch()
+    identity = PathIdentityInferencer().infer(video)
+    assert identity is not None
+    assert identity.title == "Dressrosa"
+    assert identity.episode == "24"
+
+
 def test_inferencer_reads_directory_title(tmp_path: Path) -> None:
     series = tmp_path / "AttackOnTitan"
     series.mkdir()
