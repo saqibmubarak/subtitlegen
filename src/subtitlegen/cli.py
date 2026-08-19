@@ -317,7 +317,11 @@ def generate(
     scoped = resolved.identity if not input_path.is_dir() else None
     selected_arc = arc or (scoped.arc if scoped is not None else None)
     selected_episode = episode or (scoped.episode if scoped is not None else None)
-    use_visual = resolved.enable_visual if visual_text is None else visual_text
+    use_visual = True if visual_text is None else visual_text
+    logger.info(
+        "on-screen text extraction %s",
+        "enabled" if use_visual else "disabled",
+    )
     service, selected = _service(
         settings,
         backend,

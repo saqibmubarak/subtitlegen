@@ -107,6 +107,7 @@ def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
             "avatar",
             "--preset",
             "quality",
+            "--no-visual-text",
         ],
     )
     assert result.exit_code == 0
@@ -250,7 +251,13 @@ def test_cli_auto_profile_uses_shipped_match_and_skips_visual_for_avatar(
 
     result = CliRunner().invoke(
         app,
-        ["generate", str(video), "--cache-dir", str(tmp_path / "cache")],
+        [
+            "generate",
+            str(video),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--no-visual-text",
+        ],
     )
 
     assert result.exit_code == 0, result.output
