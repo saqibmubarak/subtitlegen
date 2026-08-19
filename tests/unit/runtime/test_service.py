@@ -97,7 +97,6 @@ def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:
 
     skipped = service.process(media, output, language="en")
     assert skipped.status == "skipped"
-    assert skipped.job_id is not None
 
     changed_rules = _service(tmp_path, backend, output_key="srt-v2")
     assert changed_rules.process(media, output).status == "skipped"
@@ -105,6 +104,17 @@ def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:
     overwritten = changed_rules.process(media, output, overwrite=True)
     assert overwritten.status == "resumed"
     assert backend.calls == 1
+
+
+def test_service_skips_existing_valid_srt_without_sidecar(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.write_bytes(b"media")
+    output = tmp_path / "output.srt"
+    output.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+    backend = FakeBackend()
+    result = _service(tmp_path, backend).process(media, output)
+    assert result.status == "skipped"
+    assert backend.calls == 0
 
 
 def test_service_injects_asr_context(tmp_path: Path) -> None:

@@ -65,13 +65,9 @@ class RuntimeService:
         overwrite: bool = False,
         refresh_stages: bool = False,
     ) -> RuntimeResult:
+        if is_valid_srt(output_path) and not overwrite:
+            return RuntimeResult("skipped", output_path, None)
         manifest = self._store.create(media_path)
-        if (
-            is_valid_srt(output_path)
-            and not overwrite
-            and self._is_current_output(output_path, manifest.source_sha256)
-        ):
-            return RuntimeResult("skipped", output_path, manifest.job_id)
         initial_transcription = manifest.stage(f"transcribe-{self._asr_key}")
 
         def transcribe(job_directory: Path) -> Path:
