@@ -195,3 +195,27 @@ def test_visual_pipeline_settings_validate_runtime_overrides() -> None:
         VisualPipelineSettings(minimum_japanese_characters=0)
     with pytest.raises(ValueError):
         VisualPipelineSettings(refine_interval_seconds=0)
+
+
+def test_adaptive_sampler_keeps_disjoint_title_windows_apart() -> None:
+    class HitScanner:
+        def contains_japanese(self, _image: object) -> bool:
+            return True
+
+    sampler = AdaptiveVisualSampler(HitScanner(), refine_window_seconds=12)
+    newspaper = BoundingBox(40, 20, 80, 30)
+    board = BoundingBox(10, 200, 90, 20)
+    split = sampler._windows(
+        (
+            (100.0, (newspaper,)),
+            (110.0, (board,)),
+        )
+    )
+    assert len(split) == 2
+    merged = sampler._windows(
+        (
+            (100.0, (newspaper,)),
+            (110.0, (newspaper,)),
+        )
+    )
+    assert len(merged) == 1

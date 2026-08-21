@@ -42,6 +42,7 @@ class SampledFrame:
     image: Any
     scene_change: bool = False
     hint_boxes: tuple[BoundingBox, ...] = ()
+    redetect: bool = False
 
     def __post_init__(self) -> None:
         if self.timestamp < 0:

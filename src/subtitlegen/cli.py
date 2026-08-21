@@ -267,7 +267,8 @@ def _visual_service(
         if detector_model is not None
         else paddle
     )
-    scanner = JapaneseCharacterScanner(paddle, PaddleTextRecognizer())
+    recognizer = PaddleTextRecognizer()
+    scanner = JapaneseCharacterScanner(paddle, recognizer)
     pipeline = VisualTextPipeline(
         AdaptiveVisualSampler(
             scanner,
@@ -292,6 +293,7 @@ def _visual_service(
             text_similarity_threshold=visual_settings.tracker_text_similarity_threshold,
             hash_distance_threshold=visual_settings.tracker_hash_distance_threshold,
         ),
+        line_ocr=recognizer,
         region_proposer=TemporalDifferenceProposer(
             difference_threshold=visual_settings.proposal_difference_threshold,
             minimum_changed_area_ratio=visual_settings.proposal_minimum_area_ratio,
@@ -317,7 +319,7 @@ def _visual_service(
         NllbLocalTranslator.DEFAULT_MODEL,
         profile,
         visual_settings.cache_identity(),
-        "title-scan-v6",
+        "title-scan-v7",
     )
     visual_key = "visual-" + hashlib.sha256(repr(visual_data).encode()).hexdigest()[:12]
     store = PortableJobStore(cache_dir / "jobs")

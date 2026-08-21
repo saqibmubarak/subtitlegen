@@ -107,13 +107,17 @@ class PaddleTextRecognizer:
                 value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
+            return ""
         if isinstance(payload, (list, tuple)) and payload:
             first = payload[0]
             if isinstance(first, str):
                 return first.strip()
+            if isinstance(first, dict):
+                return PaddleTextRecognizer._text_from_payload(first)
             if isinstance(first, (list, tuple)) and first and isinstance(first[0], str):
                 return first[0].strip()
-        return str(payload).strip()
+            return ""
+        return ""
 
     def _load_engine(self) -> Any:
         if self._engine is not None:

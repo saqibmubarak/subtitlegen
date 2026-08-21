@@ -10,7 +10,7 @@ class VisualPipelineSettings:
     skip_nonref_frames: bool = False
     scene_threshold: float = 0.28
     minimum_box_area_ratio: float = 0.01
-    minimum_vertical_center_ratio: float = 0.25
+    minimum_vertical_center_ratio: float = 0.0
     detector_input_size: int = 416
     minimum_japanese_characters: int = 5
     proposal_difference_threshold: int = 24

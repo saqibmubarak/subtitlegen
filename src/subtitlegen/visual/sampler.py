@@ -278,7 +278,7 @@ class AdaptiveVisualSampler:
             [expanded[0][0], expanded[0][1], list(expanded[0][2])]
         ]
         for start, end, boxes in expanded[1:]:
-            if start <= merged[-1][1]:
+            if start <= merged[-1][1] and self._spatially_compatible(merged[-1][2], boxes):
                 merged[-1][1] = max(merged[-1][1], end)
                 merged[-1][2].extend(boxes)
             else:
@@ -289,14 +289,37 @@ class AdaptiveVisualSampler:
         )
 
     @staticmethod
+    def _spatially_compatible(
+        left: Sequence[BoundingBox],
+        right: Sequence[BoundingBox],
+    ) -> bool:
+        if not left or not right:
+            return True
+        for first in left:
+            for second in right:
+                if first.intersection_over_union(second) >= 0.1:
+                    return True
+                pad = max(40, min(first.width, second.width, first.height, second.height))
+                grown = BoundingBox(
+                    max(0, first.x - pad),
+                    max(0, first.y - pad),
+                    first.width + 2 * pad,
+                    first.height + 2 * pad,
+                )
+                if grown.intersection_over_union(second) > 0:
+                    return True
+        return False
+
+    @staticmethod
     def _hints(
         windows: tuple[tuple[float, float, tuple[BoundingBox, ...]], ...],
         timestamp: float,
     ) -> tuple[BoundingBox, ...]:
+        collected: list[BoundingBox] = []
         for start, end, boxes in windows:
             if start <= timestamp <= end:
-                return boxes
-        return ()
+                collected.extend(boxes)
+        return AdaptiveVisualSampler._dedupe_boxes(tuple(collected))
 
     @staticmethod
     def _dedupe_boxes(boxes: tuple[BoundingBox, ...]) -> tuple[BoundingBox, ...]:

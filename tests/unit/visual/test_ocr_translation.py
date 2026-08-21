@@ -78,6 +78,16 @@ def test_paddle_recognizer_reads_rec_text_payload() -> None:
     recognizer.close()
 
 
+def test_paddle_recognizer_ignores_image_payload_dicts() -> None:
+    class FakeEngine:
+        def predict(self, _image: Any) -> list[dict[str, Any]]:
+            return [{"input_path": None, "input_img": np.zeros((2, 2), dtype=np.uint8)}]
+
+    recognizer = PaddleTextRecognizer(engine_factory=FakeEngine)
+    assert recognizer.recognize(np.zeros((8, 8), dtype=np.uint8)).text == ""
+    recognizer.close()
+
+
 def test_nllb_translator_caches_and_applies_profile_canonicalization() -> None:
     model = FakeTranslationModel()
     loads: list[str] = []

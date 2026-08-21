@@ -16,20 +16,21 @@ not open a refine window. Hits keep the **exact detector boxes**, not a padded
 half-frame.
 
 Around each hit the pipeline walks `--visual-refine-seconds` (default 12) at a
-one-second crop-hash interval. Manga OCR and NLLB run only when that crop
-changes. If the title is still the same, the previous translation is reused.
-A 30-second-only grid would miss typical 3–8 second location cards, so scene
-cuts are part of the coarse scan. Probe sampling reads every decoded frame
-rather than keyframe-only (`NONREF`) skips, so a held card is not dropped
+one-second interval. Refine frames always re-detect text instead of locking the
+probe crop coordinates: a newspaper headline and a lower-third board in the
+same window must not share one frozen box. OCR and NLLB still reuse a result
+when that crop's perceptual hash is unchanged. Horizontal HUD cards go through
+Paddle recognition first, after a morphological furigana mask; Manga OCR is
+only a fallback for tall vertical crops. Probe sampling reads every decoded
+frame rather than keyframe-only (`NONREF`) skips, so a held card is not dropped
 between references. The coarse scanner reads up to 16 text boxes per probe,
 not only the largest ones, so an English `Scene-4` label does not hide a
 smaller Japanese line. Vertical (`tate-gaki`) lines are detected as tall
 boxes. The coarse Paddle recognizer rotates those crops 90° clockwise so a
-horizontal CRNN can read them; Manga OCR then sees the original tall crop.
-Nearby vertical and horizontal boxes on the same card are clustered into one
-event: vertical columns right-to-left, then horizontal lines left-to-right.
-Docker reads these from `SUBTITLEGEN_VISUAL_PROBE_SECONDS` and
-`SUBTITLEGEN_VISUAL_REFINE_SECONDS`.
+horizontal CRNN can read them. Nearby vertical and horizontal boxes on the
+same card are clustered into one event: vertical columns right-to-left, then
+horizontal lines left-to-right. Docker reads these from
+`SUBTITLEGEN_VISUAL_PROBE_SECONDS` and `SUBTITLEGEN_VISUAL_REFINE_SECONDS`.
 
 Pass `--detector-model comic-dbnet.onnx` to try an anime/comic DBNet model with
 PaddleOCR as its fallback. Detector boxes use a modest `unclip_ratio` so the

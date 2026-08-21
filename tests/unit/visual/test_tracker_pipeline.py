@@ -254,24 +254,38 @@ def test_visual_pipeline_pads_ocr_crops_within_frame_bounds(tmp_path: Path) -> N
     assert ocr.shapes == [(10, 10, 3)]
 
 
-def test_visual_pipeline_filters_small_and_upper_frame_regions(tmp_path: Path) -> None:
+def test_visual_pipeline_filters_small_regions_and_keeps_upper_cards(
+    tmp_path: Path,
+) -> None:
     image = np.zeros((100, 100, 3), dtype=np.uint8)
+    boxes = (
+        BoundingBox(0, 0, 50, 20),
+        BoundingBox(0, 70, 5, 5),
+    )
     ocr = FakeOcr()
     pipeline = VisualTextPipeline(
         FakeSampler(image),
-        FakeDetector(
-            (
-                BoundingBox(0, 0, 50, 20),
-                BoundingBox(0, 70, 5, 5),
-            )
-        ),
+        FakeDetector(boxes),
         ocr,
         FakeTranslator(),
-        VisualEventTracker(),
+        VisualEventTracker(frame_interval_seconds=0.5),
     )
 
-    assert pipeline.process(tmp_path / "video.mp4") == ()
-    assert ocr.calls == 0
+    events = pipeline.process(tmp_path / "video.mp4")
+
+    assert len(events) == 1
+    assert ocr.calls >= 1
+    strict_ocr = FakeOcr()
+    strict = VisualTextPipeline(
+        FakeSampler(image),
+        FakeDetector(boxes),
+        strict_ocr,
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        minimum_vertical_center_ratio=0.45,
+    )
+    assert strict.process(tmp_path / "video.mp4") == ()
+    assert strict_ocr.calls == 0
 
 
 def test_visual_pipeline_japanese_character_threshold_is_configurable(
@@ -464,13 +478,18 @@ def test_visual_pipeline_reuses_ocr_while_hint_crop_stays(tmp_path: Path) -> Non
                 for index in range(3)
             )
 
-    class BoomDetector:
-        def detect(self, _image: Any) -> tuple[BoundingBox, ...]:
-            raise AssertionError("hint crops should skip the detector")
+    class CountingDetector:
+        def __init__(self) -> None:
+            self.calls = 0
 
+        def detect(self, _image: Any) -> tuple[BoundingBox, ...]:
+            self.calls += 1
+            return ()
+
+    detector = CountingDetector()
     pipeline = VisualTextPipeline(
         HintSampler(),
-        BoomDetector(),
+        detector,
         ocr,
         translator,
         VisualEventTracker(frame_interval_seconds=1.0),
@@ -480,8 +499,74 @@ def test_visual_pipeline_reuses_ocr_while_hint_crop_stays(tmp_path: Path) -> Non
 
     events = pipeline.process(tmp_path / "video.mp4")
 
+    assert detector.calls == 3
     assert ocr.calls == 1
     assert translator.calls == 1
     assert len(events) == 1
     assert events[0].source_text == "日本語字幕"
     assert (events[0].start, events[0].end) == (0.0, 3.0)
+
+
+def test_visual_pipeline_redetects_new_boxes_and_prefers_paddle_for_hud(
+    tmp_path: Path,
+) -> None:
+    image = np.full((40, 80, 3), 180, dtype=np.uint8)
+    image[8:18, 4:24] = 40
+    image[8:18, 50:70] = 220
+    old = BoundingBox(4, 8, 20, 10)
+    new = BoundingBox(50, 8, 20, 10)
+
+    class GrowingDetector:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def detect(self, _image: Any) -> tuple[BoundingBox, ...]:
+            self.calls += 1
+            if self.calls == 1:
+                return (old,)
+            return (old, new)
+
+    class HintSampler:
+        def sample(self, _path: Path) -> tuple[SampledFrame, ...]:
+            return (
+                SampledFrame(0.0, image, hint_boxes=(old,)),
+                SampledFrame(1.0, image, hint_boxes=(old,)),
+            )
+
+    class LineOcr:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def recognize(self, _image: Any) -> OcrResult:
+            self.calls += 1
+            return OcrResult("工場破壊侍救出チーム")
+
+    class HallucinatingOcr:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def recognize(self, _image: Any) -> OcrResult:
+            self.calls += 1
+            return OcrResult("そういえば、")
+
+    detector = GrowingDetector()
+    manga = HallucinatingOcr()
+    line = LineOcr()
+    pipeline = VisualTextPipeline(
+        HintSampler(),
+        detector,
+        manga,
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=1.0),
+        line_ocr=line,
+        minimum_box_area_ratio=0,
+        minimum_vertical_center_ratio=0,
+    )
+
+    events = pipeline.process(tmp_path / "video.mp4")
+
+    assert detector.calls == 2
+    assert line.calls == 2
+    assert manga.calls == 0
+    assert events
+    assert all("工場破壊侍救出チーム" in event.source_text for event in events)
