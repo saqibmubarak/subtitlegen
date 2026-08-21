@@ -11,6 +11,7 @@ class DeviceCapabilities:
     architecture: str
     cuda_devices: int
     mlx_available: bool
+    whisperx_available: bool = False
 
     @property
     def is_apple_silicon(self) -> bool:
@@ -29,4 +30,5 @@ class DeviceCapabilities:
             architecture=platform.machine(),
             cuda_devices=cuda_devices,
             mlx_available=importlib.util.find_spec("mlx_whisper") is not None,
+            whisperx_available=importlib.util.find_spec("whisperx") is not None,
         )

@@ -42,7 +42,7 @@ terms:
     normalize_aliases: false
     normalize_canonical: false
   - canonical: Kin'emon
-    aliases: [Kinemon]
+    aliases: [Kinemon, Kinemar]
     category: character
     arcs: [Dressrosa]
   - canonical: Doflamingo
@@ -50,6 +50,7 @@ terms:
       - Donquixote Doflamingo
       - Don Quixote do Flamingo
       - Don Quixote do Thomingo
+      - Don't Flamingo
       - Doffy
     category: character
     arcs: [Dressrosa]
@@ -66,7 +67,7 @@ terms:
     aliases: [Raja]
     category: character
   - canonical: Dressrosa
-    aliases: [Dress Rosa]
+    aliases: [Dress Rosa, Dressnana]
     category: place
     arcs: [Dressrosa]
   - canonical: Straw Hat Pirates
@@ -96,3 +97,183 @@ terms:
     aliases: [Gear 4]
     category: term
     arcs: [Dressrosa]
+  - canonical: Momonosuke
+    aliases: [Momo]
+    category: character
+    arcs: [Dressrosa]
+    normalize_aliases: false
+  - canonical: Momonosuke
+    aliases: [Bobonosuke]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Kanjuro
+    aliases: [Kanjano]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Raizo
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Trebol
+    aliases: [Trebol, Trébol]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Pica
+    category: character
+    arcs: [Dressrosa]
+    normalize_canonical: false
+    normalize_aliases: false
+  - canonical: Diamante
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Sugar
+    category: character
+    arcs: [Dressrosa]
+    normalize_canonical: false
+    normalize_aliases: false
+  - canonical: Senor Pink
+    aliases: [Señor Pink, Senior Pink]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Lao G
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Gladius
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Dellinger
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Machvise
+    aliases: [Mach Vise]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Baby 5
+    aliases: [Baby Five]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Buffalo
+    category: character
+    arcs: [Dressrosa]
+    normalize_canonical: false
+    normalize_aliases: false
+  - canonical: Monet
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Caesar Clown
+    aliases: [Caesar]
+    category: character
+    arcs: [Dressrosa]
+    normalize_aliases: false
+  - canonical: Caesar Clown
+    aliases: [Caesar Clown Clown]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Rebecca
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Kyros
+    aliases: [Cyrus]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Viola
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Riku
+    aliases: [Riku Dold III]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Elizabello II
+    aliases: [Elizabello, Elizabello the Second]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Bartolomeo
+    aliases: [Bartolomeo the Cannibal]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Cavendish
+    aliases: [Hakuba]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Sai
+    category: character
+    arcs: [Dressrosa]
+    normalize_canonical: false
+    normalize_aliases: false
+  - canonical: Ideo
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Hajrudin
+    aliases: [Harudin]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Chinjao
+    aliases: [Don Chinjao]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Bellamy
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Sabo
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Koala
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Fujitora
+    aliases: [Issho, Admiral Fujitora, Fujii Torah, Fuji Torah]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Jesus Burgess
+    aliases: [Burgess]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Donquixote Rosinante
+    aliases: [Corazon, Cora-san, Rocinante]
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Corrida Colosseum
+    aliases: [Colosseum]
+    category: place
+    arcs: [Dressrosa]
+    normalize_aliases: false
+  - canonical: Green Bit
+    aliases: [Greenbit]
+    category: place
+    arcs: [Dressrosa]
+  - canonical: Birdcage
+    aliases: [Bird Cage]
+    category: term
+    arcs: [Dressrosa]
+  - canonical: SMILE
+    aliases: [Smile Fruit]
+    category: term
+    arcs: [Dressrosa]
+    normalize_aliases: false
+  - canonical: Straw Hat
+    aliases: [Strawhat]
+    category: term
+  - canonical: Jinbe
+    aliases: [Jimbei, Jinbei]
+    category: character
+  - canonical: Ace
+    aliases: [Portgas D. Ace, Portgas D Ace]
+    category: character
+    normalize_canonical: false
+    normalize_aliases: false
+  - canonical: Shanks
+    category: character
+  - canonical: Garp
+    aliases: [Monkey D. Garp]
+    category: character
+  - canonical: Dragon
+    aliases: [Monkey D. Dragon]
+    category: character
+    normalize_canonical: false
+    normalize_aliases: false
+  - canonical: Tashigi
+    category: character
+    arcs: [Dressrosa]
+  - canonical: Smoker
+    category: character
+    arcs: [Dressrosa]
+

@@ -321,6 +321,36 @@ def test_visual_pipeline_does_not_cache_perceptual_hash_collisions(
     assert ocr.calls == 2
 
 
+def test_visual_pipeline_clusters_nearby_horizontal_and_vertical_boxes(
+    tmp_path: Path,
+) -> None:
+    image = np.zeros((40, 40, 3), dtype=np.uint8)
+
+    class GeometryOcr:
+        def recognize(self, crop: Any) -> OcrResult:
+            height, width = np.asarray(crop).shape[:2]
+            return OcrResult("縦書き" if height > width else "横書きタイトル")
+
+    events = VisualTextPipeline(
+        FakeSampler(image),
+        FakeDetector(
+            (
+                BoundingBox(4, 20, 20, 6),
+                BoundingBox(26, 16, 6, 18),
+            )
+        ),
+        GeometryOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        minimum_box_area_ratio=0.0,
+        minimum_vertical_center_ratio=0.0,
+        minimum_japanese_characters=1,
+    ).process(tmp_path / "video.mp4")
+
+    assert len(events) == 1
+    assert events[0].source_text == "縦書き 横書きタイトル"
+
+
 def test_visual_pipeline_detects_only_proposed_regions_and_restores_coordinates(
     tmp_path: Path,
 ) -> None:

@@ -49,6 +49,31 @@ def test_builder_drops_a_single_oversized_hallucinated_word() -> None:
     assert cues == []
 
 
+def test_builder_collapses_consecutive_repeated_tokens() -> None:
+    cues = CueBuilder().build(
+        [
+            Word(0, 0.4, "Caesar"),
+            Word(0.4, 0.8, "Clown"),
+            Word(0.8, 1.2, "Clown"),
+            Word(1.2, 1.6, "to"),
+            Word(1.6, 2.0, "you."),
+        ]
+    )
+    assert cues[0].text == "Caesar Clown to you."
+
+
+def test_builder_collapses_repeated_token_before_possessive() -> None:
+    cues = CueBuilder().build(
+        [
+            Word(0, 0.4, "Caesar"),
+            Word(0.4, 0.8, "Clown"),
+            Word(0.8, 1.2, "Clown's"),
+            Word(1.2, 1.6, "boss."),
+        ]
+    )
+    assert cues[0].text == "Caesar Clown's boss."
+
+
 def test_builder_uses_lowest_word_confidence_for_correction_gate() -> None:
     cue = CueBuilder().build(
         [

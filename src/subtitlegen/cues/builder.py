@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from subtitlegen.cues.rules import CueRules
 from subtitlegen.domain.models import Cue, Word
 
 _SENTENCE_ENDINGS = (".", "!", "?", "\u3002", "\uff01", "\uff1f")
+_REPEATED_TOKEN = re.compile(r"\b(\w+)(?:\s+\1)+", flags=re.IGNORECASE)
 
 
 class CueBuilder:
@@ -60,8 +62,19 @@ class CueBuilder:
     def _join(words: Iterable[Word]) -> str:
         pieces = [word.text for word in words]
         if any(piece[:1].isspace() for piece in pieces):
-            return "".join(pieces).strip()
-        return " ".join(piece.strip() for piece in pieces).strip()
+            joined = "".join(pieces).strip()
+        else:
+            joined = " ".join(piece.strip() for piece in pieces).strip()
+        return CueBuilder._collapse_repeated_tokens(joined)
+
+    @staticmethod
+    def _collapse_repeated_tokens(text: str) -> str:
+        collapsed = text
+        while True:
+            updated = _REPEATED_TOKEN.sub(r"\1", collapsed)
+            if updated == collapsed:
+                return updated
+            collapsed = updated
 
     def _to_cue(self, words: list[Word]) -> Cue:
         start = words[0].start

@@ -40,7 +40,8 @@ def test_mlx_backend_normalizes_word_timestamps(tmp_path: Path) -> None:
     assert result.duration == 0.4
     assert calls[0]["word_timestamps"] is True
     assert calls[0]["initial_prompt"] == "Luffy"
-    assert calls[0]["condition_on_previous_text"] is True
+    assert calls[0]["condition_on_previous_text"] is False
+    assert calls[0]["hallucination_silence_threshold"] == 2.0
     assert calls[0]["path_or_hf_repo"] == "mlx-community/whisper-large-v3-turbo"
 
 
@@ -71,7 +72,7 @@ def test_mlx_backend_retains_context_across_windows(tmp_path: Path) -> None:
     )
     result = backend.transcribe(media, context=AsrContext(prompt="Luffy"))
     assert calls[0]["initial_prompt"] == "Luffy"
-    assert calls[0]["condition_on_previous_text"] is True
+    assert calls[0]["condition_on_previous_text"] is False
     assert [word.start for word in result.words] == [0]
 
 

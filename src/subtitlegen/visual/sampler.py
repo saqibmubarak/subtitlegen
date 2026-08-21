@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+import logging
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
 
+from subtitlegen.media import format_timecode
 from subtitlegen.visual.models import SampledFrame
+from subtitlegen.visual.presence import PresenceDecision
+
+logger = logging.getLogger(__name__)
 
 
 class FrameReader(Protocol):
@@ -19,21 +24,36 @@ class FrameSource(Protocol):
         """Yield selected frames for visual processing."""
 
 
+class JapanesePresenceScanner(Protocol):
+    def contains_japanese(self, image: Any) -> bool:
+        """Return whether a frame contains any Japanese characters."""
+
+
 class FrameSampler:
     def __init__(
         self,
         *,
-        frames_per_second: float = 1.5,
+        frames_per_second: float | None = 1.5,
+        interval_seconds: float | None = None,
         scene_threshold: float = 0.28,
         frame_reader: FrameReader | None = None,
+        allowed_windows: tuple[tuple[float, float], ...] | None = None,
+        skip_nonref_frames: bool = False,
     ) -> None:
-        if not 1 <= frames_per_second <= 2:
-            raise ValueError("visual sampling rate must be between one and two fps")
+        if interval_seconds is not None:
+            if interval_seconds <= 0:
+                raise ValueError("frame interval must be positive")
+            self._interval = interval_seconds
+        else:
+            if frames_per_second is None or not 1 <= frames_per_second <= 2:
+                raise ValueError("visual sampling rate must be between one and two fps")
+            self._interval = 1 / frames_per_second
         if not 0 < scene_threshold <= 1:
             raise ValueError("scene threshold must be in (0, 1]")
-        self._interval = 1 / frames_per_second
         self._scene_threshold = scene_threshold
         self._frame_reader = frame_reader
+        self._allowed_windows = allowed_windows
+        self._skip_nonref_frames = skip_nonref_frames
 
     def sample(self, media_path: Path) -> Iterable[SampledFrame]:
         if not media_path.is_file():
@@ -42,6 +62,11 @@ class FrameSampler:
             yield from self._sample_video(media_path)
             return
         yield from self._sample_arrays(self._frame_reader(media_path))
+
+    def _in_window(self, timestamp: float) -> bool:
+        if self._allowed_windows is None:
+            return True
+        return any(start <= timestamp <= end for start, end in self._allowed_windows)
 
     def _sample_arrays(
         self,
@@ -60,7 +85,7 @@ class FrameSampler:
             regular = timestamp + 1e-6 >= next_regular
             if regular:
                 next_regular = timestamp + self._interval
-            if regular or scene_change:
+            if (regular or scene_change) and self._in_window(timestamp):
                 yield SampledFrame(max(0.0, timestamp), image, scene_change)
 
     def _sample_video(self, media_path: Path) -> Iterable[SampledFrame]:
@@ -74,11 +99,14 @@ class FrameSampler:
         with av.open(str(media_path)) as container:
             stream = container.streams.video[0]
             stream.thread_type = "AUTO"
-            stream.codec_context.skip_frame = "NONREF"
+            if self._skip_nonref_frames:
+                stream.codec_context.skip_frame = "NONREF"
             for frame in container.decode(stream):
                 if frame.pts is None or stream.time_base is None:
                     continue
                 timestamp = float(frame.pts * stream.time_base)
+                if not self._in_window(timestamp):
+                    continue
                 regular = timestamp + 1e-6 >= next_regular
                 scan_scene = timestamp + 1e-6 >= next_scene_scan
                 if not regular and not scan_scene:
@@ -117,3 +145,116 @@ class FrameSampler:
             array = array.mean(axis=2)
         return array[::16, ::16] / 255.0
 
+
+class AdaptiveVisualSampler:
+    """Probe for Japanese characters, then densely sample only around hits."""
+
+    def __init__(
+        self,
+        scanner: JapanesePresenceScanner,
+        *,
+        frames_per_second: float = 1.5,
+        probe_interval_seconds: float = 4.0,
+        refine_window_seconds: float = 12.0,
+        scene_threshold: float = 0.28,
+        skip_nonref_frames: bool = False,
+        frame_reader: FrameReader | None = None,
+    ) -> None:
+        if probe_interval_seconds <= 0 or refine_window_seconds <= 0:
+            raise ValueError("probe and refine windows must be positive")
+        self._scanner = scanner
+        self._frames_per_second = frames_per_second
+        self._probe_interval = probe_interval_seconds
+        self._refine_window = refine_window_seconds
+        self._scene_threshold = scene_threshold
+        self._frame_reader = frame_reader
+        self._interval = 1 / frames_per_second
+        self._skip_nonref_frames = skip_nonref_frames
+        self._probe = FrameSampler(
+            interval_seconds=probe_interval_seconds,
+            scene_threshold=scene_threshold,
+            frame_reader=frame_reader,
+            skip_nonref_frames=skip_nonref_frames,
+        )
+
+    def sample(self, media_path: Path) -> Iterable[SampledFrame]:
+        hits = []
+        probed = 0
+        for frame in self._probe.sample(media_path):
+            probed += 1
+            decision = self._inspect(frame.image)
+            kind = "scene-change" if frame.scene_change else "interval"
+            logger.info(
+                "title-probe %s t=%.3f kind=%s decision=%s boxes=%d skipped_crops=%d "
+                "orientation=%s rec=%s",
+                format_timecode(frame.timestamp),
+                frame.timestamp,
+                kind,
+                decision.reason,
+                decision.box_count,
+                decision.skipped_crops,
+                list(decision.orientations),
+                list(decision.recognized),
+            )
+            if not decision.accepted:
+                continue
+            hits.append(frame.timestamp)
+        windows = self._windows(hits)
+        if not windows:
+            logger.info(
+                "title-windows none after %d probe(s) in %s",
+                probed,
+                media_path.name,
+            )
+            return
+        logger.info(
+            "title-windows %d from %d probe(s) / %d hit(s) in %s: %s",
+            len(windows),
+            probed,
+            len(hits),
+            media_path.name,
+            ", ".join(
+                f"{format_timecode(start)}-{format_timecode(end)}"
+                for start, end in windows
+            ),
+        )
+        dense = FrameSampler(
+            frames_per_second=self._frames_per_second,
+            scene_threshold=self._scene_threshold,
+            frame_reader=self._frame_reader,
+            allowed_windows=windows,
+            skip_nonref_frames=self._skip_nonref_frames,
+        )
+        yield from dense.sample(media_path)
+
+    def _inspect(self, image: Any) -> PresenceDecision:
+        inspect = getattr(self._scanner, "inspect", None)
+        if inspect is not None:
+            return inspect(image)
+        accepted = self._scanner.contains_japanese(image)
+        return PresenceDecision(
+            accepted,
+            "hit" if accepted else "no_japanese",
+            0,
+            (),
+        )
+
+    def close(self) -> None:
+        close = getattr(self._scanner, "close", None)
+        if close is not None:
+            close()
+
+    def _windows(self, hits: Sequence[float]) -> tuple[tuple[float, float], ...]:
+        if not hits:
+            return ()
+        expanded = sorted(
+            (max(0.0, timestamp - self._refine_window), timestamp + self._refine_window)
+            for timestamp in hits
+        )
+        merged: list[list[float]] = [list(expanded[0])]
+        for start, end in expanded[1:]:
+            if start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        return tuple((start, end) for start, end in merged)

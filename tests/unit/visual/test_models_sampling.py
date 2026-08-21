@@ -11,7 +11,7 @@ from subtitlegen.visual.models import (
     VisualEvent,
     VisualObservation,
 )
-from subtitlegen.visual.sampler import FrameSampler
+from subtitlegen.visual.sampler import AdaptiveVisualSampler, FrameSampler
 from subtitlegen.visual.settings import VisualPipelineSettings
 from subtitlegen.visual.tracker import perceptual_hash
 
@@ -19,6 +19,8 @@ from subtitlegen.visual.tracker import perceptual_hash
 def test_visual_domain_models_validate_and_box_iou() -> None:
     box = BoundingBox(0, 0, 10, 10, 0.8)
     assert box.area == 100
+    assert BoundingBox(0, 0, 6, 18).is_vertical()
+    assert not BoundingBox(0, 0, 20, 6).is_vertical()
     assert box.intersection_over_union(BoundingBox(5, 0, 10, 10)) == pytest.approx(1 / 3)
     SampledFrame(0, object())
     OcrResult("日本", 0.9)
@@ -66,6 +68,68 @@ def test_frame_sampler_combines_regular_and_scene_change_frames(tmp_path: Path) 
         FrameSampler(scene_threshold=0)
 
 
+def test_adaptive_sampler_probes_then_densifies_around_japanese_hits(
+    tmp_path: Path,
+) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+    blank = np.zeros((32, 32, 3), dtype=np.uint8)
+    titled = np.full((32, 32, 3), 255, dtype=np.uint8)
+    frames = [
+        (0.0, blank),
+        (8.0, titled),
+        (8.5, titled),
+        (9.0, titled),
+        (20.0, blank),
+    ]
+
+    class HitScanner:
+        def contains_japanese(self, image: object) -> bool:
+            return bool(np.asarray(image).any())
+
+    sampled = tuple(
+        AdaptiveVisualSampler(
+            HitScanner(),
+            frames_per_second=2,
+            probe_interval_seconds=8,
+            refine_window_seconds=1,
+            scene_threshold=0.9,
+            frame_reader=lambda _path: frames,
+        ).sample(media)
+    )
+
+    assert [frame.timestamp for frame in sampled] == [8.0, 8.5, 9.0]
+    assert AdaptiveVisualSampler(HitScanner())._probe._skip_nonref_frames is False
+    empty = tuple(
+        AdaptiveVisualSampler(
+            HitScanner(),
+            frames_per_second=1,
+            probe_interval_seconds=8,
+            refine_window_seconds=1,
+            scene_threshold=0.9,
+            frame_reader=lambda _path: [(0.0, blank), (20.0, blank)],
+        ).sample(media)
+    )
+    assert empty == ()
+    with pytest.raises(ValueError):
+        AdaptiveVisualSampler(HitScanner(), probe_interval_seconds=0)
+
+
+def test_frame_sampler_respects_allowed_windows(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    sampled = tuple(
+        FrameSampler(
+            frames_per_second=1,
+            scene_threshold=1,
+            frame_reader=lambda _path: [(0.0, image), (1.0, image), (2.0, image)],
+            allowed_windows=((0.9, 1.1),),
+        ).sample(media)
+    )
+    assert [frame.timestamp for frame in sampled] == [1.0]
+
+
 def test_perceptual_hash_is_deterministic_and_rejects_empty_images() -> None:
     image = np.arange(81, dtype=np.uint8).reshape(9, 9)
     assert perceptual_hash(image) == perceptual_hash(image.copy())
@@ -76,8 +140,13 @@ def test_perceptual_hash_is_deterministic_and_rejects_empty_images() -> None:
 def test_visual_pipeline_settings_validate_runtime_overrides() -> None:
     settings = VisualPipelineSettings(frames_per_second=2, minimum_japanese_characters=2)
     assert settings.frame_interval_seconds == 0.5
+    assert settings.probe_interval_seconds == 4.0
+    assert settings.refine_window_seconds == 12.0
+    assert settings.skip_nonref_frames is False
     assert settings.cache_identity()
     with pytest.raises(ValueError):
         VisualPipelineSettings(frames_per_second=0.5)
+    with pytest.raises(ValueError):
+        VisualPipelineSettings(probe_interval_seconds=0)
     with pytest.raises(ValueError):
         VisualPipelineSettings(minimum_japanese_characters=0)

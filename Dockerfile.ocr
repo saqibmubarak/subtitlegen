@@ -4,6 +4,7 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/models/huggingface \
     PADDLE_PDX_CACHE_HOME=/models/paddle \
+    SUBTITLEGEN_CACHE_DIR=/cache \
     FLAGS_use_mkldnn=0 \
     FLAGS_enable_mkldnn=0 \
     FLAGS_enable_pir_api=0 \

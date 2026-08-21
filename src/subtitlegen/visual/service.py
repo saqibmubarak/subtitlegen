@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from subtitlegen.export.ass import AssWriter
+from subtitlegen.media import extract_video_frame, format_timecode
 from subtitlegen.runtime.executor import StageExecutor
 from subtitlegen.runtime.jobs import PortableJobStore
 from subtitlegen.validation import parse_srt
 from subtitlegen.visual.merger import SubtitleMerger
 from subtitlegen.visual.models import BoundingBox, VisualEvent
 from subtitlegen.visual.pipeline import VisualTextPipeline
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +55,7 @@ class MultimodalSubtitleService:
     ) -> MultimodalResult:
         dialogue = parse_srt(dialogue_srt)
         visual = self._load_or_run_visual(media_path)
+        self._log_and_preview_titles(media_path, visual, output_path)
         merged = self._merger.merge(dialogue, list(visual))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
@@ -68,6 +74,32 @@ class MultimodalSubtitleService:
 
     def close(self) -> None:
         self._visual_pipeline.close()
+
+    def _log_and_preview_titles(
+        self,
+        media_path: Path,
+        events: tuple[VisualEvent, ...],
+        output_path: Path,
+    ) -> None:
+        preview_dir = output_path.with_name(f"{output_path.stem}.visual-qa")
+        for index, event in enumerate(events, start=1):
+            midpoint = (event.start + event.end) / 2
+            logger.info(
+                "on-screen title %s-%s: %s -> %s",
+                format_timecode(event.start),
+                format_timecode(event.end),
+                event.source_text,
+                event.translated_text,
+            )
+            preview = preview_dir / (
+                f"{index:03d}_{format_timecode(midpoint).replace(':', '-')}_"
+                f"{_preview_slug(event.translated_text)}.jpg"
+            )
+            try:
+                extract_video_frame(media_path, midpoint, preview)
+                logger.info("title screenshot %s", preview)
+            except (OSError, RuntimeError, ValueError, ImportError) as error:
+                logger.warning("title screenshot failed at %s: %s", preview, error)
 
     def _load_or_run_visual(self, media_path: Path) -> tuple[VisualEvent, ...]:
         if self._store is None or self._executor is None:
@@ -154,3 +186,8 @@ class MultimodalSubtitleService:
             )
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
             return False
+
+
+def _preview_slug(text: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")
+    return (slug or "title")[:40]

@@ -8,8 +8,11 @@ from subtitlegen.profiles.models import GlossaryEntry, SeriesProfile
 from subtitlegen.visual.models import OcrResult
 from subtitlegen.visual.ocr import (
     MangaOcrEngine,
+    PaddleTextRecognizer,
     contains_japanese,
+    has_title_script,
     japanese_character_count,
+    rotate_vertical_crop,
 )
 from subtitlegen.visual.translation import NllbLocalTranslator
 
@@ -52,9 +55,27 @@ def test_manga_ocr_engine_and_japanese_filter_contract() -> None:
     assert contains_japanese(result.text)
     assert japanese_character_count("日本, English") == 2
     assert not contains_japanese("English only")
+    assert has_title_script("ドレスローザ")
+    assert has_title_script("立場破壊を侍救出チーム")
+    assert has_title_script("一人はぐれた錦えもん")
+    assert not has_title_script("そういえば、")
+    assert not has_title_script("人のところで、")
+    tall = np.zeros((20, 6), dtype=np.uint8)
+    assert rotate_vertical_crop(tall).shape[:2] == (6, 20)
+    assert rotate_vertical_crop(np.zeros((6, 20), dtype=np.uint8)).shape[:2] == (6, 20)
     engine.close()
     engine.recognize(np.zeros((5, 5, 3), dtype=np.uint8))
     assert len(calls) == 2
+
+
+def test_paddle_recognizer_reads_rec_text_payload() -> None:
+    class FakeEngine:
+        def predict(self, _image: Any) -> list[dict[str, str]]:
+            return [{"rec_text": " ドレスローザ "}]
+
+    recognizer = PaddleTextRecognizer(engine_factory=FakeEngine)
+    assert recognizer.recognize(np.zeros((8, 8), dtype=np.uint8)).text == "ドレスローザ"
+    recognizer.close()
 
 
 def test_nllb_translator_caches_and_applies_profile_canonicalization() -> None:

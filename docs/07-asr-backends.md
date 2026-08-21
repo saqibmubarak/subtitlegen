@@ -6,22 +6,28 @@ on a model framework.
 
 ## Presets
 
-- `fast`: MLX large-v3-turbo on Apple Silicon, faster-whisper fp16 on CUDA, or
-  faster-whisper int8 on CPU.
-- `quality`: MLX large-v3 on Apple Silicon, WhisperX large-v3 forced alignment
-  on CUDA, or faster-whisper large-v3 on CPU.
+- `fast`: MLX large-v3-turbo on Apple Silicon, faster-whisper turbo fp16 on CUDA,
+  or faster-whisper turbo int8 on CPU. Faster, weaker names and grammar.
+- `quality`: Whisper `large-v3`. On Apple Silicon that is MLX large-v3. On CUDA it
+  is WhisperX large-v3 with forced alignment when `whisperx` is installed (the
+  `whisperx` Compose image). The OCR/`subtitler` images do not include WhisperX, so
+  quality there is faster-whisper large-v3. On CPU it is faster-whisper large-v3
+  int8.
 - `english-fast`: Parakeet TDT 0.6B v3 on CUDA and the fast platform choice
-  elsewhere. The final 8 GB CUDA choice remains subject to Phase 5 measurement.
+  elsewhere.
 
-Use a preset without also specifying a backend:
+In Docker, set `SUBTITLEGEN_PRESET` in `.env`. Do not repeat flags on
+`docker compose run`.
 
 ```bash
 subtitlegen generate /path/to/videos --preset quality
+docker compose --profile ocr run --rm visual
 ```
 
 Use `--backend faster-whisper`, `mlx`, `whisperx`, or `parakeet` for an explicit
-adapter. Unsupported hardware and missing optional dependencies fail with an
-actionable error; selection never silently falls back.
+adapter. Missing optional packages fail with an actionable error. `quality` on
+CUDA without WhisperX selects faster-whisper large-v3 instead of aborting, because
+the OCR image is expected to run quality ASR without the WhisperX extra.
 
 WhisperX and Parakeet run in isolated Docker Compose profiles:
 
@@ -30,9 +36,10 @@ docker compose --profile whisperx run --rm whisperx
 docker compose --profile nemo run --rm parakeet
 ```
 
-WhisperX consumes profile prompts and hotwords before forced alignment. The
-current Parakeet adapter is English-only and rejects series context instead of
-silently ignoring it.
+WhisperX consumes profile prompts and hotwords before forced alignment.
+Parakeet is English-only and CUDA-only, so it cannot run on Mac (including
+Docker Desktop). Glossary correction still runs after Parakeet transcription;
+the model itself does not consume Whisper-style prompts.
 
 If WhisperX exhausts an 8 GB GPU, lower `whisperx_batch_size` in the
 `[TRANSCRIPTION]` section of `config.ini` or select `fast`.

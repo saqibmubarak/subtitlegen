@@ -10,6 +10,7 @@ from subtitlegen.visual.detection import (
     PaddleOcrDetector,
     disable_paddle_onednn,
     text_detection_options,
+    text_recognition_options,
 )
 from subtitlegen.visual.models import BoundingBox
 
@@ -106,6 +107,13 @@ def test_paddle_detect_batch_retries_after_onednn_crash() -> None:
 
 def test_text_detection_options_disable_onednn_run_mode() -> None:
     options = text_detection_options()
+    assert options["enable_mkldnn"] is False
+    assert options["engine_config"]["run_mode"] == "paddle"
+
+
+def test_text_recognition_options_disable_onednn_run_mode() -> None:
+    options = text_recognition_options()
+    assert options["model_name"] == "PP-OCRv5_mobile_rec"
     assert options["enable_mkldnn"] is False
     assert options["engine_config"]["run_mode"] == "paddle"
 

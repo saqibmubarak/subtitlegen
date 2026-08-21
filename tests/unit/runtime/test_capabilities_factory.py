@@ -54,12 +54,15 @@ def test_presets_resolve_for_apple_cuda_and_cpu() -> None:
     resolver = PresetResolver()
     base = AsrSettings()
     apple = DeviceCapabilities("Darwin", "arm64", 0, True)
-    cuda = DeviceCapabilities("Linux", "x86_64", 1, False)
+    cuda = DeviceCapabilities("Linux", "x86_64", 1, False, True)
+    cuda_without_whisperx = DeviceCapabilities("Linux", "x86_64", 1, False)
     cpu = DeviceCapabilities("Linux", "x86_64", 0, False)
 
     assert resolver.resolve("quality", apple, base).settings.model == "large-v3"
     assert resolver.resolve("fast", apple, base).backend == "mlx"
     assert resolver.resolve("quality", cuda, base).backend == "whisperx"
+    assert resolver.resolve("quality", cuda_without_whisperx, base).backend == "faster-whisper"
+    assert resolver.resolve("quality", cuda_without_whisperx, base).settings.model == "large-v3"
     english = resolver.resolve("english-fast", cuda, AsrSettings(language="ja"))
     assert english.backend == "parakeet"
     assert english.settings.language == "en"

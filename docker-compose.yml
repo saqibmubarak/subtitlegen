@@ -1,22 +1,35 @@
+x-subtitlegen-environment: &subtitlegen-environment
+  HF_HOME: /models/huggingface
+  PYTHONUNBUFFERED: "1"
+  SUBTITLEGEN_PRESET: ${SUBTITLEGEN_PRESET:-quality}
+  SUBTITLEGEN_CACHE_DIR: /cache
+  SUBTITLEGEN_VISUAL_PROBE_SECONDS: ${SUBTITLEGEN_VISUAL_PROBE_SECONDS:-4}
+  SUBTITLEGEN_VISUAL_REFINE_SECONDS: ${SUBTITLEGEN_VISUAL_REFINE_SECONDS:-12}
+  SUBTITLEGEN_ENRICH_GLOSSARY: ${SUBTITLEGEN_ENRICH_GLOSSARY:-1}
+
+x-subtitlegen-volumes: &subtitlegen-volumes
+  - ${VIDEO_HOST_PATH:-./videos}:/data/videos
+  - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models
+  - ${JOB_CACHE_HOST_PATH:-./.subtitlegen-docker}:/cache
+  - ./config.ini:/app/config.ini:ro
+
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu]
+
 services:
   subtitler:
     build: .
     environment:
-      HF_HOME: /models/huggingface
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
-      - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models
-      - ${JOB_CACHE_HOST_PATH:-./.subtitlegen-docker}:/cache
-      - ./config.ini:/app/config.ini:ro
+      <<: *subtitlegen-environment
+    volumes: *subtitlegen-volumes
     deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: ["generate", "/data/videos", "--backend", "faster-whisper", "--cache-dir", "/cache"]
+      <<: *gpu
+    command: ["generate", "/data/videos"]
 
   whisperx:
     profiles: ["whisperx"]
@@ -24,21 +37,12 @@ services:
       context: .
       dockerfile: Dockerfile.whisperx
     environment:
-      HF_HOME: /models/huggingface
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
-      - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models
-      - ${JOB_CACHE_HOST_PATH:-./.subtitlegen-docker}:/cache
-      - ./config.ini:/app/config.ini:ro
+      <<: *subtitlegen-environment
+      SUBTITLEGEN_PRESET: ${SUBTITLEGEN_PRESET:-quality}
+    volumes: *subtitlegen-volumes
     deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: ["generate", "/data/videos", "--preset", "quality", "--cache-dir", "/cache"]
+      <<: *gpu
+    command: ["generate", "/data/videos"]
 
   parakeet:
     profiles: ["nemo"]
@@ -46,21 +50,12 @@ services:
       context: .
       dockerfile: Dockerfile.nemo
     environment:
-      HF_HOME: /models/huggingface
-      PYTHONUNBUFFERED: "1"
-    volumes:
-      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
-      - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models
-      - ${JOB_CACHE_HOST_PATH:-./.subtitlegen-docker}:/cache
-      - ./config.ini:/app/config.ini:ro
+      <<: *subtitlegen-environment
+      SUBTITLEGEN_PRESET: ${SUBTITLEGEN_PRESET:-english-fast}
+    volumes: *subtitlegen-volumes
     deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command: ["generate", "/data/videos", "--preset", "english-fast", "--cache-dir", "/cache"]
+      <<: *gpu
+    command: ["generate", "/data/videos"]
 
   visual:
     profiles: ["ocr"]
@@ -68,32 +63,13 @@ services:
       context: .
       dockerfile: Dockerfile.ocr
     environment:
-      HF_HOME: /models/huggingface
+      <<: *subtitlegen-environment
       PADDLE_PDX_CACHE_HOME: /models/paddle
-      PYTHONUNBUFFERED: "1"
       FLAGS_use_mkldnn: "0"
       FLAGS_enable_mkldnn: "0"
       FLAGS_enable_pir_api: "0"
       FLAGS_enable_pir_in_executor: "0"
-    volumes:
-      - ${VIDEO_HOST_PATH:-./videos}:/data/videos
-      - ${MODEL_CACHE_HOST_PATH:-./model_cache}:/models
-      - ${JOB_CACHE_HOST_PATH:-./.subtitlegen-docker}:/cache
-      - ./config.ini:/app/config.ini:ro
+    volumes: *subtitlegen-volumes
     deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    command:
-      - generate
-      - /data/videos
-      - --preset
-      - fast
-      - --profile
-      - one-piece
-      - --visual-text
-      - --cache-dir
-      - /cache
+      <<: *gpu
+    command: ["generate", "/data/videos"]

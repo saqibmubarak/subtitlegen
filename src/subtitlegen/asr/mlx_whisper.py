@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from subtitlegen.domain.models import Transcription, Word
 from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
 from subtitlegen.media import load_audio_mono
 from subtitlegen.settings import AsrSettings
+
+logger = logging.getLogger(__name__)
 
 MlxTranscribe = Callable[..., dict[str, Any]]
 AudioLoader = Callable[[Path], Any]
@@ -65,7 +68,10 @@ class MlxWhisperBackend:
                 path_or_hf_repo=self._model_repository(self._settings.model),
                 language=language if language is not None else self._settings.language,
                 word_timestamps=True,
-                condition_on_previous_text=context is not None,
+                condition_on_previous_text=False,
+                hallucination_silence_threshold=2.0,
+                compression_ratio_threshold=2.4,
+                no_speech_threshold=0.6,
                 initial_prompt=context.prompt if context is not None else None,
             )
         except RuntimeError as error:
@@ -93,6 +99,14 @@ class MlxWhisperBackend:
                 )
         words.sort(key=lambda word: (word.start, word.end))
         duration = len(audio) / sample_rate
+        logger.info(
+            "asr-mlx model=%s duration=%.1fs segments=%d words=%d language=%s",
+            self._settings.model,
+            duration,
+            len(result.get("segments", [])),
+            len(words),
+            result.get("language") or language or "unknown",
+        )
         return Transcription(
             words=tuple(words),
             language=str(result.get("language") or language or "unknown"),

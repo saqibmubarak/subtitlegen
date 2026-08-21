@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -15,6 +16,7 @@ from subtitlegen.export.ass import AssWriter
 from subtitlegen.export.srt import SrtWriter
 from subtitlegen.logging import configure_logging
 from subtitlegen.media import discover_media, media_duration
+from subtitlegen.profiles.builder import AutomaticProfileBuilder
 from subtitlegen.profiles.correction import (
     ConfidenceGatedCorrector,
     ConservativeLocalCorrector,
@@ -41,10 +43,11 @@ from subtitlegen.visual.detection import (
     disable_paddle_onednn,
 )
 from subtitlegen.visual.merger import SubtitleMerger
-from subtitlegen.visual.ocr import MangaOcrEngine
+from subtitlegen.visual.ocr import MangaOcrEngine, PaddleTextRecognizer
 from subtitlegen.visual.pipeline import VisualTextPipeline
+from subtitlegen.visual.presence import JapaneseCharacterScanner
 from subtitlegen.visual.proposals import TemporalDifferenceProposer
-from subtitlegen.visual.sampler import FrameSampler
+from subtitlegen.visual.sampler import AdaptiveVisualSampler
 from subtitlegen.visual.service import MultimodalSubtitleService
 from subtitlegen.visual.settings import VisualPipelineSettings
 from subtitlegen.visual.tracker import VisualEventTracker
@@ -90,6 +93,7 @@ def _service(
         profile.profile_id if profile is not None else None,
         arc,
         episode,
+        "asr-decode-v2",
     )
     asr_hash = hashlib.sha256(repr(asr_data).encode()).hexdigest()[:12]
     asr_key = f"{selected}-{asr_hash}"
@@ -129,6 +133,12 @@ def _resolve_runtime(
         DeviceCapabilities.detect(),
         settings.asr,
     )
+    logger.info(
+        "preset %s selected %s %s",
+        resolved.name,
+        resolved.backend,
+        resolved.settings.model,
+    )
     return replace(settings, asr=resolved.settings), resolved.backend
 
 
@@ -150,14 +160,55 @@ def _resolve_profile(
     auto: bool,
 ) -> ResolvedProfile:
     shipped = _shipped_repository(profiles_dir)
-    return ProfileResolver(
-        cache=ProfileRepository(cache_dir / "profiles"),
+    cache = ProfileRepository(cache_dir / "profiles")
+    resolved = ProfileResolver(
+        cache=cache,
         shipped=shipped,
     ).resolve(
         paths,
         explicit_id=profile,
         auto=auto,
         explicit_repository=shipped,
+    )
+    return _expand_glossary(resolved, cache)
+
+
+def _glossary_enrichment_enabled() -> bool:
+    return os.environ.get("SUBTITLEGEN_ENRICH_GLOSSARY", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _expand_glossary(
+    resolved: ResolvedProfile,
+    cache: ProfileRepository,
+) -> ResolvedProfile:
+    if resolved.profile is None or not _glossary_enrichment_enabled():
+        return resolved
+    if len(resolved.profile.terms) >= 80:
+        return resolved
+    try:
+        updated = AutomaticProfileBuilder().enrich(resolved.profile)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        logger.warning("glossary enrichment failed: %s", error)
+        return resolved
+    if len(updated.terms) <= len(resolved.profile.terms):
+        return resolved
+    cache.save(updated)
+    logger.info(
+        "expanded glossary for %s from %d to %d terms",
+        updated.title,
+        len(resolved.profile.terms),
+        len(updated.terms),
+    )
+    return ResolvedProfile(
+        updated,
+        resolved.identity,
+        f"{resolved.source}+wikipedia",
+        resolved.enable_visual,
     )
 
 
@@ -200,9 +251,13 @@ def _visual_service(
     cache_dir: Path,
     frames_per_second: float,
     minimum_japanese_characters: int = 5,
+    probe_interval_seconds: float = 4.0,
+    refine_window_seconds: float = 12.0,
 ) -> MultimodalSubtitleService:
     visual_settings = VisualPipelineSettings(
         frames_per_second=frames_per_second,
+        probe_interval_seconds=probe_interval_seconds,
+        refine_window_seconds=refine_window_seconds,
         minimum_japanese_characters=minimum_japanese_characters,
     )
     disable_paddle_onednn()
@@ -212,10 +267,15 @@ def _visual_service(
         if detector_model is not None
         else paddle
     )
+    scanner = JapaneseCharacterScanner(paddle, PaddleTextRecognizer())
     pipeline = VisualTextPipeline(
-        FrameSampler(
+        AdaptiveVisualSampler(
+            scanner,
             frames_per_second=visual_settings.frames_per_second,
+            probe_interval_seconds=visual_settings.probe_interval_seconds,
+            refine_window_seconds=visual_settings.refine_window_seconds,
             scene_threshold=visual_settings.scene_threshold,
+            skip_nonref_frames=visual_settings.skip_nonref_frames,
         ),
         detector,
         MangaOcrEngine(),
@@ -256,6 +316,7 @@ def _visual_service(
         NllbLocalTranslator.DEFAULT_MODEL,
         profile,
         visual_settings.cache_identity(),
+        "title-scan-v5",
     )
     visual_key = "visual-" + hashlib.sha256(repr(visual_data).encode()).hexdigest()[:12]
     store = PortableJobStore(cache_dir / "jobs")
@@ -272,14 +333,28 @@ def _visual_service(
 @app.command()
 def generate(
     input_path: Annotated[Path, typer.Argument(exists=True, readable=True)],
-    config: Annotated[Path, typer.Option("--config")] = Path("config.ini"),
-    backend: Annotated[str, typer.Option("--backend")] = "auto",
-    preset: Annotated[str | None, typer.Option("--preset")] = None,
-    output_dir: Annotated[Path | None, typer.Option("--output-dir")] = None,
-    cache_dir: Annotated[Path, typer.Option("--cache-dir")] = Path(".subtitlegen"),
-    profile: Annotated[str | None, typer.Option("--profile")] = None,
+    config: Annotated[Path, typer.Option("--config", envvar="SUBTITLEGEN_CONFIG")] = Path(
+        "config.ini"
+    ),
+    backend: Annotated[str, typer.Option("--backend", envvar="SUBTITLEGEN_BACKEND")] = "auto",
+    preset: Annotated[
+        str | None,
+        typer.Option("--preset", envvar="SUBTITLEGEN_PRESET"),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", envvar="SUBTITLEGEN_OUTPUT_DIR"),
+    ] = None,
+    cache_dir: Annotated[
+        Path,
+        typer.Option("--cache-dir", envvar="SUBTITLEGEN_CACHE_DIR"),
+    ] = Path(".subtitlegen"),
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", envvar="SUBTITLEGEN_PROFILE"),
+    ] = None,
     profiles_dir: Annotated[Path | None, typer.Option("--profiles-dir")] = None,
-    arc: Annotated[str | None, typer.Option("--arc")] = None,
+    arc: Annotated[str | None, typer.Option("--arc", envvar="SUBTITLEGEN_ARC")] = None,
     episode: Annotated[str | None, typer.Option("--episode")] = None,
     auto_profile: Annotated[bool, typer.Option("--auto-profile/--no-auto-profile")] = True,
     local_correction: Annotated[
@@ -290,13 +365,27 @@ def generate(
         bool | None,
         typer.Option("--visual-text/--no-visual-text"),
     ] = None,
-    visual_fps: Annotated[float, typer.Option("--visual-fps")] = 1.5,
+    visual_fps: Annotated[
+        float,
+        typer.Option("--visual-fps", envvar="SUBTITLEGEN_VISUAL_FPS"),
+    ] = 1.5,
+    visual_probe_seconds: Annotated[
+        float,
+        typer.Option("--visual-probe-seconds", envvar="SUBTITLEGEN_VISUAL_PROBE_SECONDS"),
+    ] = 4.0,
+    visual_refine_seconds: Annotated[
+        float,
+        typer.Option("--visual-refine-seconds", envvar="SUBTITLEGEN_VISUAL_REFINE_SECONDS"),
+    ] = 12.0,
     visual_min_japanese_characters: Annotated[
         int,
         typer.Option("--visual-min-japanese-characters", min=1),
     ] = 5,
     detector_model: Annotated[Path | None, typer.Option("--detector-model")] = None,
-    overwrite: Annotated[bool, typer.Option("--overwrite")] = False,
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", envvar="SUBTITLEGEN_OVERWRITE"),
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
     """Generate SRT files recursively, resuming valid cached stages."""
@@ -318,6 +407,13 @@ def generate(
     selected_arc = arc or (scoped.arc if scoped is not None else None)
     selected_episode = episode or (scoped.episode if scoped is not None else None)
     use_visual = True if visual_text is None else visual_text
+    if series_profile is not None:
+        logger.info(
+            "glossary %s (%s) has %d terms",
+            series_profile.title,
+            resolved.source,
+            len(series_profile.terms),
+        )
     logger.info(
         "on-screen text extraction %s",
         "enabled" if use_visual else "disabled",
@@ -359,7 +455,13 @@ def generate(
                         service,
                         local_correction=local_correction,
                     )
-                logger.info("%s: %s using %s", result.status, output, selected)
+                if result.status == "skipped":
+                    logger.info(
+                        "skipped: %s already exists; pass --overwrite to regenerate",
+                        output,
+                    )
+                else:
+                    logger.info("%s: %s using %s", result.status, output, selected)
             except Exception:
                 failures += 1
                 logger.exception("failed: %s", video)
@@ -375,6 +477,8 @@ def generate(
             cache_dir,
             visual_fps,
             visual_min_japanese_characters,
+            visual_probe_seconds,
+            visual_refine_seconds,
         )
         try:
             for video, dialogue_output in generated:

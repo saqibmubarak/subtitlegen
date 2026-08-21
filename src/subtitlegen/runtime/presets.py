@@ -30,10 +30,26 @@ class PresetResolver:
             return ResolvedPreset(name, "mlx", replace(base, model=model, device="auto"))
         if capabilities.cuda_devices:
             if name == "quality":
+                if capabilities.whisperx_available:
+                    return ResolvedPreset(
+                        name,
+                        "whisperx",
+                        replace(
+                            base,
+                            model="large-v3",
+                            device="cuda",
+                            compute_type="float16",
+                        ),
+                    )
                 return ResolvedPreset(
                     name,
-                    "whisperx",
-                    replace(base, model="large-v3", device="cuda", compute_type="float16"),
+                    "faster-whisper",
+                    replace(
+                        base,
+                        model="large-v3",
+                        device="cuda",
+                        compute_type="float16",
+                    ),
                 )
             if name == "english-fast":
                 return ResolvedPreset(

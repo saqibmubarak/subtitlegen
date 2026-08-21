@@ -8,9 +8,16 @@ from typing import Any
 
 import numpy as np
 
+from subtitlegen.media import format_timecode
 from subtitlegen.visual.detection import TextDetector
 from subtitlegen.visual.models import BoundingBox, SampledFrame, VisualEvent, VisualObservation
-from subtitlegen.visual.ocr import OcrEngine, japanese_character_count
+from subtitlegen.visual.ocr import (
+    OcrEngine,
+    has_title_script,
+    japanese_character_count,
+    kanji_character_count,
+    katakana_character_count,
+)
 from subtitlegen.visual.proposals import RegionProposer
 from subtitlegen.visual.sampler import FrameSource
 from subtitlegen.visual.tracker import VisualEventTracker, perceptual_hash
@@ -82,14 +89,24 @@ class VisualTextPipeline:
         cache: dict[bytes, tuple[str, str]] = {}
         region_memory: dict[tuple[int, int, int, int], tuple[_RememberedText, ...]] = {}
         batch: list[SampledFrame] = []
+        sampled = 0
         for frame in self._sampler.sample(media_path):
+            sampled += 1
             batch.append(frame)
             batch_size = 4 if self._region_proposer is not None else 16
             if len(batch) == batch_size:
                 self._process_batch(batch, observations, cache, region_memory)
                 batch.clear()
         self._process_batch(batch, observations, cache, region_memory)
-        return self._tracker.track(observations)
+        events = self._tracker.track(observations)
+        logger.info(
+            "title-ocr-summary frames=%d observations=%d events=%d in %s",
+            sampled,
+            len(observations),
+            len(events),
+            media_path.name,
+        )
+        return events
 
     def _process_batch(
         self,
@@ -141,6 +158,16 @@ class VisualTextPipeline:
                         remembered,
                     )
                     if refreshed is not None:
+                        logger.info(
+                            "title-frame %s t=%.3f kind=%s decision=remembered count=%d text=%r",
+                            format_timecode(frames[frame_index].timestamp),
+                            frames[frame_index].timestamp,
+                            "scene-change"
+                            if frames[frame_index].scene_change
+                            else "interval",
+                            len(refreshed),
+                            refreshed[0].source_text if refreshed else "",
+                        )
                         observations.extend(refreshed)
                         continue
                     region_memory.pop(region_key, None)
@@ -215,41 +242,106 @@ class VisualTextPipeline:
             boxes = self._deduplicate_boxes(
                 tuple(box for box, _ in frame_detections)
             )
+            kept, dropped = self._partition_boxes(
+                boxes, image.shape[1], image.shape[0]
+            )
+            kind = "scene-change" if frame.scene_change else "interval"
+            logger.info(
+                "title-frame %s t=%.3f kind=%s detections=%d eligible=%d dropped=%s",
+                format_timecode(frame.timestamp),
+                frame.timestamp,
+                kind,
+                len(boxes),
+                len(kept),
+                [
+                    f"{reason}[{self._box_label(box)}]"
+                    for box, reason in dropped
+                ],
+            )
             remembered_by_region: dict[
                 tuple[int, int, int, int],
                 list[_RememberedText],
             ] = {}
-            for box in self._eligible_boxes(boxes, image.shape[1], image.shape[0]):
-                crop = self._crop(
-                    image,
-                    box.x,
-                    box.y,
-                    box.width,
-                    box.height,
-                    padding_ratio=self._crop_padding_ratio,
-                )
-                if crop.size == 0:
-                    continue
-                image_hash = perceptual_hash(crop)
-                fingerprint = self._fingerprint(crop)
-                cached = cache.get(fingerprint)
-                if cached is None:
-                    result = self._ocr.recognize(crop)
-                    source_text = result.text.strip()
-                    if (
-                        japanese_character_count(source_text)
-                        < self._minimum_japanese_characters
-                    ):
-                        logger.debug(
-                            "filtered short visual OCR candidate at %.3fs: %r",
+            for cluster in self._cluster_boxes(kept):
+                recognized: list[tuple[BoundingBox, str, str, int, tuple[int, ...]]] = []
+                for box in self._reading_order(cluster):
+                    crop = self._crop(
+                        image,
+                        box.x,
+                        box.y,
+                        box.width,
+                        box.height,
+                        padding_ratio=self._crop_padding_ratio,
+                    )
+                    if crop.size == 0:
+                        logger.info(
+                            "title-ocr %s t=%.3f box=%s decision=empty_crop",
+                            format_timecode(frame.timestamp),
                             frame.timestamp,
-                            source_text,
+                            self._box_label(box),
                         )
                         continue
-                    translated_text = self._translator.translate(source_text)
-                    cache[fingerprint] = (source_text, translated_text)
-                else:
-                    source_text, translated_text = cached
+                    image_hash = perceptual_hash(crop)
+                    fingerprint = self._fingerprint(crop)
+                    cached = cache.get(fingerprint)
+                    if cached is None:
+                        result = self._ocr.recognize(crop)
+                        source_text = result.text.strip()
+                        japanese_count = japanese_character_count(source_text)
+                        if japanese_count < self._minimum_japanese_characters:
+                            logger.info(
+                                "title-ocr %s t=%.3f box=%s decision=short_japanese jp=%d text=%r",
+                                format_timecode(frame.timestamp),
+                                frame.timestamp,
+                                self._box_label(box),
+                                japanese_count,
+                                source_text,
+                            )
+                            continue
+                        if not has_title_script(source_text):
+                            logger.info(
+                                "title-ocr %s t=%.3f box=%s decision=not_title_script "
+                                "jp=%d kanji=%d kata=%d text=%r",
+                                format_timecode(frame.timestamp),
+                                frame.timestamp,
+                                self._box_label(box),
+                                japanese_count,
+                                kanji_character_count(source_text),
+                                katakana_character_count(source_text),
+                                source_text,
+                            )
+                            continue
+                        translated_text = self._translator.translate(source_text)
+                        cache[fingerprint] = (source_text, translated_text)
+                        cache_state = "fresh"
+                    else:
+                        source_text, translated_text = cached
+                        cache_state = "cached"
+                    logger.info(
+                        "title-ocr %s t=%.3f box=%s orientation=%s decision=keep cache=%s text=%r translation=%r",
+                        format_timecode(frame.timestamp),
+                        frame.timestamp,
+                        self._box_label(box),
+                        "vertical" if box.is_vertical() else "horizontal",
+                        cache_state,
+                        source_text,
+                        translated_text,
+                    )
+                    recognized.append(
+                        (
+                            box,
+                            source_text,
+                            translated_text,
+                            image_hash,
+                            self._visual_signature(crop),
+                        )
+                    )
+                if not recognized:
+                    continue
+                box = self._union_boxes(tuple(item[0] for item in recognized))
+                source_text = " ".join(item[1] for item in recognized)
+                translated_text = " ".join(item[2] for item in recognized)
+                image_hash = recognized[0][3]
                 observations.append(
                     VisualObservation(
                         frame.timestamp,
@@ -262,7 +354,8 @@ class VisualTextPipeline:
                 region = next(
                     region
                     for detected_box, region in frame_detections
-                    if detected_box == box
+                    if detected_box in {item[0] for item in recognized}
+                    or detected_box == recognized[0][0]
                 )
                 remembered_by_region.setdefault(self._region_key(region), []).append(
                     _RememberedText(
@@ -270,7 +363,7 @@ class VisualTextPipeline:
                         source_text,
                         translated_text,
                         image_hash,
-                        self._visual_signature(crop),
+                        recognized[0][4],
                     )
                 )
             region_memory.update(
@@ -281,7 +374,7 @@ class VisualTextPipeline:
             )
 
     def close(self) -> None:
-        for component in (self._detector, self._ocr, self._translator):
+        for component in (self._sampler, self._detector, self._ocr, self._translator):
             close = getattr(component, "close", None)
             if close is not None:
                 close()
@@ -417,13 +510,36 @@ class VisualTextPipeline:
         frame_width: int,
         frame_height: int,
     ) -> tuple[BoundingBox, ...]:
+        kept, _dropped = self._partition_boxes(boxes, frame_width, frame_height)
+        return kept
+
+    def _partition_boxes(
+        self,
+        boxes: tuple[BoundingBox, ...],
+        frame_width: int,
+        frame_height: int,
+    ) -> tuple[tuple[BoundingBox, ...], tuple[tuple[BoundingBox, str], ...]]:
         minimum_area = frame_width * frame_height * self._minimum_box_area_ratio
         minimum_center = frame_height * self._minimum_vertical_center_ratio
-        return tuple(
-            box
-            for box in self._primary_boxes(boxes)
-            if box.area >= minimum_area and box.y + box.height / 2 >= minimum_center
-        )
+        primary = set(self._primary_boxes(boxes))
+        kept: list[BoundingBox] = []
+        dropped: list[tuple[BoundingBox, str]] = []
+        for box in boxes:
+            if box not in primary:
+                dropped.append((box, "nested"))
+                continue
+            if box.area < minimum_area:
+                dropped.append((box, "too_small"))
+                continue
+            if box.y + box.height / 2 < minimum_center:
+                dropped.append((box, "too_high"))
+                continue
+            kept.append(box)
+        return tuple(kept), tuple(dropped)
+
+    @staticmethod
+    def _box_label(box: BoundingBox) -> str:
+        return f"x={box.x},y={box.y},w={box.width},h={box.height}"
 
     @staticmethod
     def _deduplicate_boxes(boxes: tuple[BoundingBox, ...]) -> tuple[BoundingBox, ...]:
@@ -432,6 +548,70 @@ class VisualTextPipeline:
             if all(box.intersection_over_union(other) < 0.8 for other in selected):
                 selected.append(box)
         return tuple(selected)
+
+    def _cluster_boxes(
+        self,
+        boxes: tuple[BoundingBox, ...],
+    ) -> tuple[tuple[BoundingBox, ...], ...]:
+        remaining = list(boxes)
+        clusters: list[tuple[BoundingBox, ...]] = []
+        while remaining:
+            seed = remaining.pop(0)
+            cluster = [seed]
+            changed = True
+            while changed:
+                changed = False
+                leftover: list[BoundingBox] = []
+                union = self._union_boxes(tuple(cluster))
+                for box in remaining:
+                    if self._nearby(union, box):
+                        cluster.append(box)
+                        changed = True
+                    else:
+                        leftover.append(box)
+                remaining = leftover
+            clusters.append(tuple(cluster))
+        return tuple(clusters)
+
+    @staticmethod
+    def _reading_order(boxes: tuple[BoundingBox, ...]) -> tuple[BoundingBox, ...]:
+        vertical = sorted(
+            (box for box in boxes if box.is_vertical()),
+            key=lambda box: (-box.x, box.y),
+        )
+        horizontal = sorted(
+            (box for box in boxes if not box.is_vertical()),
+            key=lambda box: (box.y, box.x),
+        )
+        return tuple(vertical + horizontal)
+
+    @staticmethod
+    def _nearby(left: BoundingBox, right: BoundingBox, padding_ratio: float = 0.25) -> bool:
+        pad_x = max(8, round(max(left.width, right.width) * padding_ratio))
+        pad_y = max(8, round(max(left.height, right.height) * padding_ratio))
+        expanded = BoundingBox(
+            max(0, left.x - pad_x),
+            max(0, left.y - pad_y),
+            left.width + pad_x * 2,
+            left.height + pad_y * 2,
+        )
+        return expanded.intersection_over_union(right) > 0 or (
+            right.x < expanded.x + expanded.width
+            and expanded.x < right.x + right.width
+            and right.y < expanded.y + expanded.height
+            and expanded.y < right.y + right.height
+        )
+
+    @staticmethod
+    def _union_boxes(boxes: tuple[BoundingBox, ...]) -> BoundingBox:
+        if len(boxes) == 1:
+            return boxes[0]
+        left = min(box.x for box in boxes)
+        top = min(box.y for box in boxes)
+        right = max(box.x + box.width for box in boxes)
+        bottom = max(box.y + box.height for box in boxes)
+        score = max(box.score for box in boxes)
+        return BoundingBox(left, top, right - left, bottom - top, score)
 
     def _detect_inputs(
         self,

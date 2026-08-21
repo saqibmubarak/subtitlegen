@@ -1,0 +1,13 @@
+# Mac Docker Desktop has no NVIDIA GPU. CUDA Compose reservations fail here.
+# Prefer native: .venv/bin/subtitlegen generate samples --preset quality
+# Parakeet still cannot run on Mac (NeMo adapter requires CUDA).
+
+services:
+  subtitler:
+    deploy: {}
+  whisperx:
+    deploy: {}
+  parakeet:
+    deploy: {}
+  visual:
+    deploy: {}

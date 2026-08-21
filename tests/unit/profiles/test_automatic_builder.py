@@ -100,7 +100,11 @@ def test_wikipedia_source_parses_names_and_anime_markers() -> None:
                                 {
                                     "slots": {
                                         "main": {
-                                            "*": "'''Monkey D. Luffy''' '''Roronoa Zoro'''"
+                                            "*": (
+                                                "'''Monkey D. Luffy''' '''Roronoa Zoro'''\n"
+                                                "* [[Trafalgar Law]]\n"
+                                                "* '''Bartolomeo'''"
+                                            )
                                         }
                                     }
                                 }
@@ -138,7 +142,7 @@ def test_wikipedia_source_parses_names_and_anime_markers() -> None:
     assert document.japanese_title == "ONE PIECE"
     assert source.looks_like_anime(document)
     names = {entry.canonical for entry in source.terms(document)}
-    assert {"Monkey D. Luffy", "Roronoa Zoro", "Nami"} <= names
+    assert {"Monkey D. Luffy", "Roronoa Zoro", "Nami", "Trafalgar Law", "Bartolomeo"} <= names
 
 
 def test_web_search_extracts_names_from_snippets() -> None:
@@ -174,6 +178,46 @@ def test_builder_uses_search_when_wikipedia_is_thin() -> None:
     assert built.source == "search"
     assert built.profile.terms[0].canonical == "Aang"
     assert not built.enable_visual
+
+
+def test_builder_enriches_thin_profiles_from_wikipedia() -> None:
+    http = FakeHttp(
+        {
+            "opensearch": ["One Piece", ["One Piece"], ["desc"], ["url"]],
+            "list=search": {"query": {"search": []}},
+            "titles=One": {
+                "query": {
+                    "pages": {
+                        "1": {
+                            "title": "One Piece",
+                            "extract": "One Piece follows Monkey D. Luffy.",
+                            "categories": [{"title": "Category:1997 manga"}],
+                            "langlinks": [{"lang": "ja", "*": "ONE PIECE"}],
+                            "revisions": [
+                                {
+                                    "slots": {
+                                        "main": {"*": "'''Nami''' '''Usopp'''"}
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        }
+    )
+    class SilentSearch:
+        def terms(self, _title: str) -> tuple[GlossaryEntry, ...]:
+            return ()
+
+    builder = AutomaticProfileBuilder(
+        WikipediaGlossarySource(http),
+        SilentSearch(),  # type: ignore[arg-type]
+    )
+    profile = SeriesProfile(1, "one-piece", "One Piece", "en", (GlossaryEntry("Luffy"),))
+    updated = builder.enrich(profile)
+    names = {entry.canonical for entry in updated.terms}
+    assert {"Luffy", "Nami", "Usopp"} <= names
 
 
 def test_transcript_extractor_merges_repeated_names() -> None:

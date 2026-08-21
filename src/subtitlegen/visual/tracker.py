@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from difflib import SequenceMatcher
 from typing import Any
 
 import numpy as np
 
+from subtitlegen.media import format_timecode
 from subtitlegen.visual.models import VisualEvent, VisualObservation
+
+logger = logging.getLogger(__name__)
 
 
 def perceptual_hash(image: Any) -> int:
@@ -68,17 +72,36 @@ class VisualEventTracker:
             else:
                 tracks.append([observation])
 
-        events = [
-            VisualEvent(
-                start=track[0].timestamp,
-                end=track[-1].timestamp + self._frame_interval,
-                source_text=track[-1].source_text,
-                translated_text=track[-1].translated_text,
-                box=track[-1].box,
+        events: list[VisualEvent] = []
+        for track in tracks:
+            last = track[-1]
+            if len(track) < self._min_observations:
+                logger.info(
+                    "title-track drop %s observations=%d need=%d text=%r translation=%r",
+                    format_timecode(track[0].timestamp),
+                    len(track),
+                    self._min_observations,
+                    last.source_text,
+                    last.translated_text,
+                )
+                continue
+            events.append(
+                VisualEvent(
+                    start=track[0].timestamp,
+                    end=last.timestamp + self._frame_interval,
+                    source_text=last.source_text,
+                    translated_text=last.translated_text,
+                    box=last.box,
+                )
             )
-            for track in tracks
-            if len(track) >= self._min_observations
-        ]
+            logger.info(
+                "title-track keep %s-%s observations=%d text=%r translation=%r",
+                format_timecode(track[0].timestamp),
+                format_timecode(last.timestamp + self._frame_interval),
+                len(track),
+                last.source_text,
+                last.translated_text,
+            )
         return tuple(sorted(events, key=lambda event: (event.start, event.end)))
 
     def _matches(self, previous: VisualObservation, current: VisualObservation) -> bool:

@@ -6,7 +6,7 @@ import pytest
 
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.asr.parakeet import ParakeetBackend
-from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
+from subtitlegen.errors import BackendOutOfMemoryError
 from subtitlegen.settings import AsrSettings
 
 
@@ -56,14 +56,14 @@ def test_parakeet_normalizes_timestamps_reuses_and_releases_model(tmp_path: Path
     assert len(created) == 2
 
 
-def test_parakeet_rejects_context_languages_missing_media_and_oom(tmp_path: Path) -> None:
+def test_parakeet_ignores_decoder_context_and_rejects_non_english(tmp_path: Path) -> None:
     media = tmp_path / "clip.wav"
     media.touch()
     backend = ParakeetBackend(AsrSettings(), model_factory=lambda _name: FakeModel())
     with pytest.raises(ValueError, match="English"):
         backend.transcribe(media, language="ja")
-    with pytest.raises(BackendUnavailableError, match="context"):
-        backend.transcribe(media, context=AsrContext("Buggy"))
+    result = backend.transcribe(media, context=AsrContext("Buggy"))
+    assert [word.text for word in result.words] == ["Hello", " world"]
     with pytest.raises(FileNotFoundError):
         backend.transcribe(tmp_path / "missing.wav")
 

@@ -4,9 +4,12 @@ from dataclasses import astuple, dataclass
 @dataclass(frozen=True, slots=True)
 class VisualPipelineSettings:
     frames_per_second: float = 1.5
+    probe_interval_seconds: float = 4.0
+    refine_window_seconds: float = 12.0
+    skip_nonref_frames: bool = False
     scene_threshold: float = 0.28
     minimum_box_area_ratio: float = 0.01
-    minimum_vertical_center_ratio: float = 0.45
+    minimum_vertical_center_ratio: float = 0.25
     detector_input_size: int = 416
     minimum_japanese_characters: int = 5
     proposal_difference_threshold: int = 24
@@ -26,6 +29,10 @@ class VisualPipelineSettings:
     def __post_init__(self) -> None:
         if not 1 <= self.frames_per_second <= 2:
             raise ValueError("visual sampling rate must be between one and two fps")
+        if self.probe_interval_seconds <= 0:
+            raise ValueError("visual probe interval must be positive")
+        if self.refine_window_seconds <= 0:
+            raise ValueError("visual refine window must be positive")
         if self.minimum_japanese_characters <= 0:
             raise ValueError("minimum Japanese character count must be positive")
 

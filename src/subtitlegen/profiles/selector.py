@@ -10,7 +10,7 @@ from subtitlegen.profiles.models import GlossaryEntry, SeriesProfile
 @dataclass(frozen=True, slots=True)
 class ContextBudget:
     max_prompt_tokens: int = 224
-    max_hotwords: int = 64
+    max_hotwords: int = 200
 
     def __post_init__(self) -> None:
         if self.max_prompt_tokens <= 0 or self.max_hotwords <= 0:

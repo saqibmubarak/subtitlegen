@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ from subtitlegen.asr.context import AsrContext
 from subtitlegen.domain.models import Transcription, Word
 from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
 from subtitlegen.settings import AsrSettings
+
+logger = logging.getLogger(__name__)
 
 ModelFactory = Callable[[str], Any]
 
@@ -45,9 +48,9 @@ class ParakeetBackend:
         if requested_language.split("-")[0].casefold() != "en":
             raise ValueError("Parakeet TDT 0.6B v3 supports English audio only")
         if context is not None:
-            raise BackendUnavailableError(
-                "Parakeet context boosting is unavailable in this adapter; "
-                "use faster-whisper or WhisperX for series profiles"
+            logger.info(
+                "Parakeet cannot consume ASR prompts or hotwords; "
+                "glossary correction still runs after transcription"
             )
         try:
             hypotheses = self._load_model().transcribe(

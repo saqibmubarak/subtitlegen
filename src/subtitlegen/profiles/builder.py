@@ -55,3 +55,21 @@ class AutomaticProfileBuilder:
             logger.info("built empty remote glossary for %s; using title-only profile", title)
         enable_visual = document is not None and self._wikipedia.looks_like_anime(document)
         return BuiltProfile(profile=profile, enable_visual=enable_visual, source=source)
+
+    def enrich(self, profile: SeriesProfile) -> SeriesProfile:
+        document = self._wikipedia.fetch(profile.title)
+        wiki_terms = self._wikipedia.terms(document) if document is not None else ()
+        search_terms = (
+            self._web_search.terms(profile.title)
+            if len(wiki_terms) < self._minimum_remote_terms
+            else ()
+        )
+        if not wiki_terms and not search_terms:
+            return profile
+        return self._composer.compose(
+            profile.title,
+            (profile.terms, wiki_terms, search_terms),
+            profile.visual_translations,
+            language=profile.language,
+            profile_id=profile.profile_id,
+        )

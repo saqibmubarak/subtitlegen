@@ -22,6 +22,10 @@ class BoundingBox:
     def area(self) -> int:
         return self.width * self.height
 
+    def is_vertical(self, *, ratio: float = 1.4) -> bool:
+        """True for tall crops typical of tate-gaki (top-to-bottom) Japanese."""
+        return self.height >= self.width * ratio
+
     def intersection_over_union(self, other: BoundingBox) -> float:
         left = max(self.x, other.x)
         top = max(self.y, other.y)

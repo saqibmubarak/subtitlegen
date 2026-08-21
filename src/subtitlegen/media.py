@@ -17,6 +17,37 @@ def discover_media(input_path: Path, extensions: tuple[str, ...]) -> list[Path]:
     )
 
 
+def format_timecode(seconds: float) -> str:
+    centiseconds = max(0, round(seconds * 100))
+    hours, remainder = divmod(centiseconds, 360_000)
+    minutes, remainder = divmod(remainder, 6_000)
+    whole_seconds, fraction = divmod(remainder, 100)
+    return f"{hours:02d}:{minutes:02d}:{whole_seconds:02d}.{fraction:02d}"
+
+
+def extract_video_frame(path: Path, timestamp: float, output_path: Path) -> Path:
+    """Seek to a timestamp and write one RGB JPEG/PNG for visual QA."""
+    import av
+    from PIL import Image
+
+    if timestamp < 0:
+        raise ValueError("frame timestamp must be non-negative")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with av.open(str(path)) as container:
+        if not container.streams.video:
+            raise ValueError(f"media has no video stream: {path}")
+        stream = container.streams.video[0]
+        container.seek(round(timestamp * 1_000_000), backward=True)
+        for frame in container.decode(stream):
+            if frame.pts is None or stream.time_base is None:
+                continue
+            if float(frame.pts * stream.time_base) + 1e-3 < timestamp:
+                continue
+            Image.fromarray(frame.to_ndarray(format="rgb24")).save(output_path)
+            return output_path
+    raise RuntimeError(f"no video frame near {timestamp:.3f}s in {path}")
+
+
 def media_duration(path: Path) -> float:
     import av
 

@@ -44,12 +44,14 @@ paths. Docker Desktop converts these mounted paths into Linux container paths.
 
 ```powershell
 Copy-Item .env.example .env
+# Set VIDEO_HOST_PATH with forward slashes, then:
 docker compose config --quiet
-docker compose build subtitler
-docker compose --profile whisperx build whisperx
-docker compose --profile nemo build parakeet
 docker compose --profile ocr build visual
+docker compose --profile ocr run --rm visual
 ```
+
+Generate options (`SUBTITLEGEN_PRESET`, cache, OCR probe interval) come from
+`.env`. Existing SRT files are skipped unless `SUBTITLEGEN_OVERWRITE=1`.
 
 The repeatable acceptance script builds all runtime and test images, runs the
 unit/integration suite in each dependency profile, verifies CUDA visibility and

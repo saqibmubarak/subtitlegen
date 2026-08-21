@@ -4,12 +4,19 @@ import wave
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
 import subtitlegen.cli as cli_module
 from subtitlegen.cli import app
 from subtitlegen.logging import JsonFormatter
-from subtitlegen.media import discover_media, load_audio_mono, media_duration
+from subtitlegen.media import (
+    discover_media,
+    extract_video_frame,
+    format_timecode,
+    load_audio_mono,
+    media_duration,
+)
 from subtitlegen.profiles.models import SeriesProfile
 from subtitlegen.profiles.repository import ProfileRepository
 from subtitlegen.runtime.capabilities import DeviceCapabilities
@@ -59,6 +66,9 @@ def test_media_duration_uses_pyav_without_ffmpeg_binary(tmp_path: Path) -> None:
     assert 0.9 <= media_duration(audio) <= 1.1
     decoded = load_audio_mono(audio)
     assert 15_900 <= decoded.size <= 16_100
+    assert format_timecode(1242.0) == "00:20:42.00"
+    with pytest.raises(ValueError):
+        extract_video_frame(audio, -1, tmp_path / "frame.jpg")
 
 
 def test_json_formatter_emits_structured_message() -> None:
@@ -118,6 +128,8 @@ def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
     assert selected_profiles[0].profile_id == "avatar"
     assert selected_backends == ["mlx"]
     assert fake.closed
+    assert fake.options[0]["overwrite"] is False
+    assert "refresh_stages" not in fake.options[0]
 
 
 def test_cli_benchmark_outputs_json(monkeypatch: Any, tmp_path: Path) -> None:
@@ -169,7 +181,20 @@ def test_cli_benchmark_preserves_interrupt_and_closes_service(
     assert service.closed
 
 
-def test_cli_applies_preset_language_before_execution(monkeypatch: Any) -> None:
+def test_cli_reads_preset_from_environment(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SUBTITLEGEN_PRESET", "fast")
+    monkeypatch.setattr(
+        cli_module.DeviceCapabilities,
+        "detect",
+        lambda: DeviceCapabilities("Linux", "x86_64", 1, False),
+    )
+    settings, backend = cli_module._resolve_runtime(
+        AppSettings(),
+        "auto",
+        "fast",
+    )
+    assert backend == "faster-whisper"
+    assert settings.asr.model == "large-v3-turbo"
     monkeypatch.setattr(
         cli_module.DeviceCapabilities,
         "detect",

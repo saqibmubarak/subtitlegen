@@ -53,6 +53,19 @@ def text_detection_options() -> dict[str, Any]:
     }
 
 
+def text_recognition_options() -> dict[str, Any]:
+    return {
+        "model_name": "PP-OCRv5_mobile_rec",
+        "enable_mkldnn": False,
+        "engine": "paddle_static",
+        "engine_config": {
+            "device_type": "cpu",
+            "run_mode": "paddle",
+            "enable_new_ir": False,
+        },
+    }
+
+
 class TextDetector(Protocol):
     def detect(self, image: Any) -> Sequence[BoundingBox]:
         """Return candidate text regions without performing OCR."""

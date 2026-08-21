@@ -71,11 +71,13 @@ class WikipediaGlossarySource:
         title = self._opensearch(query)
         if title is None:
             return None
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             page_future = pool.submit(self._page, title)
-            characters_future = pool.submit(self._character_list, title)
+            characters_future = pool.submit(self._named_list, title, "characters")
+            locations_future = pool.submit(self._named_list, title, "locations")
             page = page_future.result()
             character_wikitext = characters_future.result()
+            location_wikitext = locations_future.result()
         if page is None:
             return None
         extract, wikitext, categories, japanese_title = page
@@ -85,13 +87,18 @@ class WikipediaGlossarySource:
             wikitext=wikitext,
             categories=categories,
             japanese_title=japanese_title,
-            character_wikitext=character_wikitext,
+            character_wikitext="\n".join(
+                part for part in (character_wikitext, location_wikitext) if part
+            ),
         )
 
     def terms(self, document: WikipediaDocument) -> tuple[GlossaryEntry, ...]:
         names: list[tuple[str, str]] = []
         names.extend((name, "character") for name in self._infobox_names(document.wikitext))
         names.extend((name, "character") for name in self._bold_names(document.character_wikitext))
+        names.extend(
+            (name, "character") for name in self._list_link_names(document.character_wikitext)
+        )
         names.extend((name, "character") for name in self._bold_names(document.wikitext))
         names.extend((name, "term") for name in self._proper_names(document.extract))
         seen: set[str] = set()
@@ -110,7 +117,7 @@ class WikipediaGlossarySource:
                     normalize_canonical=normalize_canonical,
                 )
             )
-            if len(entries) >= 80:
+            if len(entries) >= 400:
                 break
         return tuple(entries)
 
@@ -183,17 +190,17 @@ class WikipediaGlossarySource:
                 if isinstance(slots, dict):
                     main = slots.get("main")
                     if isinstance(main, dict) and isinstance(main.get("*"), str):
-                        wikitext = main["*"][:20_000]
+                        wikitext = main["*"][:80_000]
                 elif isinstance(revision.get("*"), str):
-                    wikitext = str(revision["*"])[:20_000]
+                    wikitext = str(revision["*"])[:80_000]
         return extract, wikitext, categories, japanese
 
-    def _character_list(self, title: str) -> str:
+    def _named_list(self, title: str, kind: str) -> str:
         payload = self._get(
             {
                 "action": "query",
                 "list": "search",
-                "srsearch": f"List of {title} characters",
+                "srsearch": f"List of {title} {kind}",
                 "srlimit": "1",
                 "format": "json",
             }
@@ -206,10 +213,14 @@ class WikipediaGlossarySource:
         first = results[0]
         if not isinstance(first, dict) or not isinstance(first.get("title"), str):
             return ""
-        if "character" not in first["title"].casefold():
+        haystack = first["title"].casefold()
+        if kind.rstrip("s") not in haystack and kind not in haystack:
             return ""
         page = self._page(first["title"])
         return page[1] if page is not None else ""
+
+    def _character_list(self, title: str) -> str:
+        return self._named_list(title, "characters")
 
     def _get(self, params: dict[str, str]) -> Any:
         url = f"{_API}?{urlencode(params)}"
@@ -238,7 +249,18 @@ class WikipediaGlossarySource:
 
     @classmethod
     def _bold_names(cls, wikitext: str) -> tuple[str, ...]:
-        return tuple(match.group(1).strip() for match in _BOLD.finditer(wikitext[:12_000]))
+        return tuple(match.group(1).strip() for match in _BOLD.finditer(wikitext))
+
+    @classmethod
+    def _list_link_names(cls, wikitext: str) -> tuple[str, ...]:
+        names: list[str] = []
+        for line in wikitext.splitlines():
+            stripped = line.lstrip()
+            if not stripped.startswith(("*", "#", ":")):
+                continue
+            names.extend(cls._link_names(stripped))
+            names.extend(cls._bold_names(stripped))
+        return tuple(names)
 
     @classmethod
     def _link_names(cls, value: str) -> tuple[str, ...]:

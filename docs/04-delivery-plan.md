@@ -59,7 +59,7 @@ This maximizes throughput without duplicating model memory. Actual batch sizes a
 Target CLI:
 
 ```bash
-docker compose run --rm subtitler generate /data/videos --preset quality
+docker compose --profile ocr run --rm visual
 subtitlegen generate ./videos
 ```
 
