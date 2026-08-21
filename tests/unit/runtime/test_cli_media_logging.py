@@ -391,7 +391,8 @@ def test_visual_service_uses_fps_for_sampling_timing_and_cache(tmp_path: Path) -
     assert one_fps._visual_pipeline._sampler._interval == 1.0
     assert one_fps._visual_pipeline._tracker._frame_interval == 1.0
     assert two_fps._visual_pipeline._sampler._interval == 0.5
-    assert two_fps._visual_pipeline._tracker._frame_interval == 0.5
+    assert two_fps._visual_pipeline._tracker._frame_interval == 1.0
+    assert two_fps._visual_pipeline._sampler._refine_interval == 1.0
     assert one_fps._visual_key != two_fps._visual_key
     assert one_fps._visual_key != short_cards._visual_key
     one_fps.close()

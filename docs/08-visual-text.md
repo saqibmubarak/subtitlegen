@@ -9,32 +9,32 @@ subtitlegen generate episode.mp4 --no-visual-text
 ```
 
 OCR does **not** run Manga OCR on every frame. A mobile Japanese recognizer first
-probes on scene changes and every `--visual-probe-seconds` (default 4). If any
-Japanese character is found, the pipeline densifies `--visual-refine-seconds`
-(default 12) before and after that hit at `--visual-fps` (1–2). A 30-second-only
-grid would miss typical 3–8 second location cards, so scene cuts are part of the
-coarse scan. Probe and dense sampling read every decoded frame rather than
-keyframe-only (`NONREF`) skips, so a held card is not dropped between references.
-The coarse scanner reads up to 16 text boxes per probe, not only the largest
-ones, so an English `Scene-4` label does not hide a smaller Japanese line.
-Vertical (`tate-gaki`) lines are detected as tall boxes. The coarse Paddle
-recognizer rotates those crops 90° clockwise so a horizontal CRNN can read
-them; Manga OCR then sees the original tall crop, which it already handles.
+probes on scene changes and every `--visual-probe-seconds` (default 4). A probe
+is a hit only when a crop has **title script** (two or more kanji, or three or
+more katakana). One-character noise and hiragana filler such as `そういえば` do
+not open a refine window. Hits keep the **exact detector boxes**, not a padded
+half-frame.
+
+Around each hit the pipeline walks `--visual-refine-seconds` (default 12) at a
+one-second crop-hash interval. Manga OCR and NLLB run only when that crop
+changes. If the title is still the same, the previous translation is reused.
+A 30-second-only grid would miss typical 3–8 second location cards, so scene
+cuts are part of the coarse scan. Probe sampling reads every decoded frame
+rather than keyframe-only (`NONREF`) skips, so a held card is not dropped
+between references. The coarse scanner reads up to 16 text boxes per probe,
+not only the largest ones, so an English `Scene-4` label does not hide a
+smaller Japanese line. Vertical (`tate-gaki`) lines are detected as tall
+boxes. The coarse Paddle recognizer rotates those crops 90° clockwise so a
+horizontal CRNN can read them; Manga OCR then sees the original tall crop.
 Nearby vertical and horizontal boxes on the same card are clustered into one
 event: vertical columns right-to-left, then horizontal lines left-to-right.
 Docker reads these from `SUBTITLEGEN_VISUAL_PROBE_SECONDS` and
 `SUBTITLEGEN_VISUAL_REFINE_SECONDS`.
 
-Inside a refine window the default PaddleOCR detector is used before Manga OCR.
 Pass `--detector-model comic-dbnet.onnx` to try an anime/comic DBNet model with
-PaddleOCR as its fallback.
-
-Before running a model detector, the pipeline compares low-resolution adjacent
-frames and proposes at most two changing regions. Proposals persist briefly so
-static title text is observed more than once. Regions are padded, normalized,
-and batched for Paddle/DBNet; Manga OCR only sees detector-confirmed crops.
-Stable detector-confirmed regions are compared perceptually and reused without
-rerunning either model.
+PaddleOCR as its fallback. Detector boxes use a modest `unclip_ratio` so the
+OCR crop stays on the glyphs. If a refine frame has no saved boxes, a small
+motion proposal (about 8% padding, not 50% of the frame) is the fallback.
 
 The precision policy then keeps large cards, requires at least five Japanese
 characters, and rejects Manga OCR filler that is only conversational hiragana.

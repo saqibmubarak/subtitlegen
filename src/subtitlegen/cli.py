@@ -274,6 +274,7 @@ def _visual_service(
             frames_per_second=visual_settings.frames_per_second,
             probe_interval_seconds=visual_settings.probe_interval_seconds,
             refine_window_seconds=visual_settings.refine_window_seconds,
+            refine_interval_seconds=visual_settings.refine_interval_seconds,
             scene_threshold=visual_settings.scene_threshold,
             skip_nonref_frames=visual_settings.skip_nonref_frames,
         ),
@@ -285,7 +286,7 @@ def _visual_service(
         ),
         VisualEventTracker(
             max_gap_seconds=visual_settings.tracker_max_gap_seconds,
-            frame_interval_seconds=visual_settings.frame_interval_seconds,
+            frame_interval_seconds=visual_settings.refine_interval_seconds,
             min_observations=visual_settings.tracker_minimum_observations,
             box_iou_threshold=visual_settings.tracker_box_iou_threshold,
             text_similarity_threshold=visual_settings.tracker_text_similarity_threshold,
@@ -316,7 +317,7 @@ def _visual_service(
         NllbLocalTranslator.DEFAULT_MODEL,
         profile,
         visual_settings.cache_identity(),
-        "title-scan-v5",
+        "title-scan-v6",
     )
     visual_key = "visual-" + hashlib.sha256(repr(visual_data).encode()).hexdigest()[:12]
     store = PortableJobStore(cache_dir / "jobs")

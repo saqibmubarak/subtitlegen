@@ -108,6 +108,7 @@ def test_paddle_detect_batch_retries_after_onednn_crash() -> None:
 def test_text_detection_options_disable_onednn_run_mode() -> None:
     options = text_detection_options()
     assert options["enable_mkldnn"] is False
+    assert options["unclip_ratio"] == pytest.approx(1.35)
     assert options["engine_config"]["run_mode"] == "paddle"
 
 

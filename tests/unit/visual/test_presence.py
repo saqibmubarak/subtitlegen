@@ -63,7 +63,7 @@ def test_japanese_character_scanner_finds_japanese_behind_larger_english_boxes()
     class MixedRecognizer:
         def recognize(self, image: Any) -> OcrResult:
             width = int(np.asarray(image).shape[1])
-            return OcrResult("Scene-4" if width >= 20 else "錦えもんはぐれた")
+            return OcrResult("Scene-4" if width >= 20 else "ドレスローザ")
 
     large = BoundingBox(0, 0, 30, 10)
     small = BoundingBox(0, 12, 8, 8)
@@ -83,7 +83,8 @@ def test_japanese_character_scanner_finds_japanese_behind_larger_english_boxes()
     decision = hidden.inspect(image)
     assert decision.accepted
     assert decision.reason == "hit"
-    assert "錦えもんはぐれた" in decision.recognized
+    assert "ドレスローザ" in decision.recognized
+    assert decision.boxes
     assert not capped.contains_japanese(image)
 
 
@@ -102,3 +103,16 @@ def test_japanese_character_scanner_rotates_vertical_crops_for_horizontal_ocr() 
     assert decision.accepted
     assert decision.recognized == ("ドレスローザ",)
     assert decision.orientations == ("vertical-rotated",)
+    assert decision.boxes == (BoundingBox(0, 0, 6, 20),)
+
+
+def test_japanese_character_scanner_rejects_hiragana_filler() -> None:
+    scanner = JapaneseCharacterScanner(
+        FakeDetector((BoundingBox(0, 0, 4, 4),)),
+        FakeRecognizer("そういえば"),
+        analysis_width=32,
+    )
+    decision = scanner.inspect(np.zeros((16, 16), dtype=np.uint8))
+    assert not decision.accepted
+    assert decision.reason == "weak_japanese"
+    assert decision.boxes == ()

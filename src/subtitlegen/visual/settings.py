@@ -6,6 +6,7 @@ class VisualPipelineSettings:
     frames_per_second: float = 1.5
     probe_interval_seconds: float = 4.0
     refine_window_seconds: float = 12.0
+    refine_interval_seconds: float = 1.0
     skip_nonref_frames: bool = False
     scene_threshold: float = 0.28
     minimum_box_area_ratio: float = 0.01
@@ -15,7 +16,7 @@ class VisualPipelineSettings:
     proposal_difference_threshold: int = 24
     proposal_minimum_area_ratio: float = 0.001
     proposal_maximum_area_ratio: float = 0.35
-    proposal_padding_ratio: float = 0.5
+    proposal_padding_ratio: float = 0.08
     proposal_hold_frames: int = 12
     proposal_full_frame_hold_frames: int = 4
     proposal_analysis_width: int = 320
@@ -33,6 +34,8 @@ class VisualPipelineSettings:
             raise ValueError("visual probe interval must be positive")
         if self.refine_window_seconds <= 0:
             raise ValueError("visual refine window must be positive")
+        if self.refine_interval_seconds <= 0:
+            raise ValueError("visual refine interval must be positive")
         if self.minimum_japanese_characters <= 0:
             raise ValueError("minimum Japanese character count must be positive")
 

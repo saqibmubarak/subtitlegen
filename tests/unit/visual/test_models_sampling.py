@@ -14,6 +14,7 @@ from subtitlegen.visual.models import (
 from subtitlegen.visual.sampler import AdaptiveVisualSampler, FrameSampler
 from subtitlegen.visual.settings import VisualPipelineSettings
 from subtitlegen.visual.tracker import perceptual_hash
+from subtitlegen.visual.presence import PresenceDecision
 
 
 def test_visual_domain_models_validate_and_box_iou() -> None:
@@ -115,6 +116,46 @@ def test_adaptive_sampler_probes_then_densifies_around_japanese_hits(
         AdaptiveVisualSampler(HitScanner(), probe_interval_seconds=0)
 
 
+def test_adaptive_sampler_attaches_title_boxes_to_refine_frames(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+    blank = np.zeros((32, 32, 3), dtype=np.uint8)
+    titled = np.full((32, 32, 3), 255, dtype=np.uint8)
+    box = BoundingBox(2, 4, 8, 6)
+
+    class BoxScanner:
+        def inspect(self, image: object) -> PresenceDecision:
+            if np.asarray(image).any():
+                return PresenceDecision(
+                    True,
+                    "hit",
+                    1,
+                    ("ドレスローザ",),
+                    boxes=(box,),
+                )
+            return PresenceDecision(False, "no_japanese", 0, ())
+
+    sampled = tuple(
+        AdaptiveVisualSampler(
+            BoxScanner(),
+            frames_per_second=2,
+            probe_interval_seconds=8,
+            refine_window_seconds=1,
+            scene_threshold=0.9,
+            frame_reader=lambda _path: [
+                (0.0, blank),
+                (8.0, titled),
+                (8.5, titled),
+                (9.0, titled),
+                (20.0, blank),
+            ],
+        ).sample(media)
+    )
+
+    assert [frame.timestamp for frame in sampled] == [8.0, 8.5, 9.0]
+    assert all(frame.hint_boxes == (box,) for frame in sampled)
+
+
 def test_frame_sampler_respects_allowed_windows(tmp_path: Path) -> None:
     media = tmp_path / "video.mp4"
     media.touch()
@@ -142,6 +183,8 @@ def test_visual_pipeline_settings_validate_runtime_overrides() -> None:
     assert settings.frame_interval_seconds == 0.5
     assert settings.probe_interval_seconds == 4.0
     assert settings.refine_window_seconds == 12.0
+    assert settings.refine_interval_seconds == 1.0
+    assert settings.proposal_padding_ratio == pytest.approx(0.08)
     assert settings.skip_nonref_frames is False
     assert settings.cache_identity()
     with pytest.raises(ValueError):
@@ -150,3 +193,5 @@ def test_visual_pipeline_settings_validate_runtime_overrides() -> None:
         VisualPipelineSettings(probe_interval_seconds=0)
     with pytest.raises(ValueError):
         VisualPipelineSettings(minimum_japanese_characters=0)
+    with pytest.raises(ValueError):
+        VisualPipelineSettings(refine_interval_seconds=0)

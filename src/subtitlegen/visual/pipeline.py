@@ -88,6 +88,7 @@ class VisualTextPipeline:
         observations: list[VisualObservation] = []
         cache: dict[bytes, tuple[str, str]] = {}
         region_memory: dict[tuple[int, int, int, int], tuple[_RememberedText, ...]] = {}
+        hint_memory: dict[tuple[int, int, int, int], _RememberedText] = {}
         batch: list[SampledFrame] = []
         sampled = 0
         for frame in self._sampler.sample(media_path):
@@ -95,9 +96,15 @@ class VisualTextPipeline:
             batch.append(frame)
             batch_size = 4 if self._region_proposer is not None else 16
             if len(batch) == batch_size:
-                self._process_batch(batch, observations, cache, region_memory)
+                self._process_batch(
+                    batch,
+                    observations,
+                    cache,
+                    region_memory,
+                    hint_memory,
+                )
                 batch.clear()
-        self._process_batch(batch, observations, cache, region_memory)
+        self._process_batch(batch, observations, cache, region_memory, hint_memory)
         events = self._tracker.track(observations)
         logger.info(
             "title-ocr-summary frames=%d observations=%d events=%d in %s",
@@ -117,7 +124,15 @@ class VisualTextPipeline:
             tuple[int, int, int, int],
             tuple[_RememberedText, ...],
         ],
+        hint_memory: dict[tuple[int, int, int, int], _RememberedText],
     ) -> None:
+        if not frames:
+            return
+        hinted = [frame for frame in frames if frame.hint_boxes]
+        rest = [frame for frame in frames if not frame.hint_boxes]
+        if hinted:
+            self._observe_hint_frames(hinted, observations, cache, hint_memory)
+        frames = rest
         if not frames:
             return
         images = [np.asarray(frame.image) for frame in frames]
@@ -371,6 +386,126 @@ class VisualTextPipeline:
                     key: tuple(remembered)
                     for key, remembered in remembered_by_region.items()
                 }
+            )
+
+    def _observe_hint_frames(
+        self,
+        frames: list[SampledFrame],
+        observations: list[VisualObservation],
+        cache: dict[bytes, tuple[str, str]],
+        hint_memory: dict[tuple[int, int, int, int], _RememberedText],
+    ) -> None:
+        for frame in frames:
+            image = np.asarray(frame.image)
+            boxes = self._deduplicate_boxes(frame.hint_boxes)
+            kind = "scene-change" if frame.scene_change else "interval"
+            recognized: list[tuple[BoundingBox, str, str, int, tuple[int, ...]]] = []
+            for box in self._reading_order(boxes):
+                crop = self._crop(
+                    image,
+                    box.x,
+                    box.y,
+                    box.width,
+                    box.height,
+                    padding_ratio=max(self._crop_padding_ratio, 0.04),
+                )
+                if crop.size == 0:
+                    logger.info(
+                        "title-ocr %s t=%.3f box=%s decision=empty_crop",
+                        format_timecode(frame.timestamp),
+                        frame.timestamp,
+                        self._box_label(box),
+                    )
+                    continue
+                image_hash = perceptual_hash(crop)
+                signature = self._visual_signature(crop)
+                key = self._region_key(box)
+                remembered = hint_memory.get(key)
+                if remembered is not None and (image_hash ^ remembered.image_hash).bit_count() <= 8:
+                    logger.info(
+                        "title-ocr %s t=%.3f box=%s orientation=%s decision=keep cache=unchanged text=%r translation=%r",
+                        format_timecode(frame.timestamp),
+                        frame.timestamp,
+                        self._box_label(box),
+                        "vertical" if box.is_vertical() else "horizontal",
+                        remembered.source_text,
+                        remembered.translated_text,
+                    )
+                    recognized.append(
+                        (
+                            box,
+                            remembered.source_text,
+                            remembered.translated_text,
+                            image_hash,
+                            signature,
+                        )
+                    )
+                    continue
+                fingerprint = self._fingerprint(crop)
+                cached = cache.get(fingerprint)
+                if cached is None:
+                    result = self._ocr.recognize(crop)
+                    source_text = result.text.strip()
+                    japanese_count = japanese_character_count(source_text)
+                    if japanese_count < self._minimum_japanese_characters or not has_title_script(
+                        source_text
+                    ):
+                        hint_memory.pop(key, None)
+                        logger.info(
+                            "title-ocr %s t=%.3f box=%s decision=title_gone jp=%d kanji=%d kata=%d text=%r",
+                            format_timecode(frame.timestamp),
+                            frame.timestamp,
+                            self._box_label(box),
+                            japanese_count,
+                            kanji_character_count(source_text),
+                            katakana_character_count(source_text),
+                            source_text,
+                        )
+                        continue
+                    translated_text = self._translator.translate(source_text)
+                    cache[fingerprint] = (source_text, translated_text)
+                    cache_state = "fresh"
+                else:
+                    source_text, translated_text = cached
+                    cache_state = "cached"
+                logger.info(
+                    "title-ocr %s t=%.3f box=%s orientation=%s decision=keep cache=%s text=%r translation=%r",
+                    format_timecode(frame.timestamp),
+                    frame.timestamp,
+                    self._box_label(box),
+                    "vertical" if box.is_vertical() else "horizontal",
+                    cache_state,
+                    source_text,
+                    translated_text,
+                )
+                hint_memory[key] = _RememberedText(
+                    box,
+                    source_text,
+                    translated_text,
+                    image_hash,
+                    signature,
+                )
+                recognized.append(
+                    (box, source_text, translated_text, image_hash, signature)
+                )
+            logger.info(
+                "title-frame %s t=%.3f kind=%s decision=hint_crops detections=%d kept=%d",
+                format_timecode(frame.timestamp),
+                frame.timestamp,
+                kind,
+                len(boxes),
+                len(recognized),
+            )
+            if not recognized:
+                continue
+            observations.append(
+                VisualObservation(
+                    frame.timestamp,
+                    self._union_boxes(tuple(item[0] for item in recognized)),
+                    " ".join(item[1] for item in recognized),
+                    " ".join(item[2] for item in recognized),
+                    recognized[0][3],
+                )
             )
 
     def close(self) -> None:

@@ -449,3 +449,39 @@ def test_visual_pipeline_rechecks_perceptual_hash_collision(
 
     assert perceptual_hash(white) == perceptual_hash(gray)
     assert detector.calls >= 5
+
+
+def test_visual_pipeline_reuses_ocr_while_hint_crop_stays(tmp_path: Path) -> None:
+    image = np.full((40, 40, 3), 180, dtype=np.uint8)
+    box = BoundingBox(4, 8, 20, 10)
+    ocr = FakeOcr()
+    translator = FakeTranslator()
+
+    class HintSampler:
+        def sample(self, _path: Path) -> tuple[SampledFrame, ...]:
+            return tuple(
+                SampledFrame(index * 1.0, image, hint_boxes=(box,))
+                for index in range(3)
+            )
+
+    class BoomDetector:
+        def detect(self, _image: Any) -> tuple[BoundingBox, ...]:
+            raise AssertionError("hint crops should skip the detector")
+
+    pipeline = VisualTextPipeline(
+        HintSampler(),
+        BoomDetector(),
+        ocr,
+        translator,
+        VisualEventTracker(frame_interval_seconds=1.0),
+        minimum_box_area_ratio=0,
+        minimum_vertical_center_ratio=0,
+    )
+
+    events = pipeline.process(tmp_path / "video.mp4")
+
+    assert ocr.calls == 1
+    assert translator.calls == 1
+    assert len(events) == 1
+    assert events[0].source_text == "日本語字幕"
+    assert (events[0].start, events[0].end) == (0.0, 3.0)

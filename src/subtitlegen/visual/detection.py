@@ -42,7 +42,7 @@ def text_detection_options() -> dict[str, Any]:
         "model_name": "PP-OCRv5_mobile_det",
         "thresh": 0.3,
         "box_thresh": 0.5,
-        "unclip_ratio": 2.0,
+        "unclip_ratio": 1.35,
         "enable_mkldnn": False,
         "engine": "paddle_static",
         "engine_config": {

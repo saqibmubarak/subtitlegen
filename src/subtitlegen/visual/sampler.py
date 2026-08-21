@@ -8,7 +8,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from subtitlegen.media import format_timecode
-from subtitlegen.visual.models import SampledFrame
+from subtitlegen.visual.models import BoundingBox, SampledFrame
 from subtitlegen.visual.presence import PresenceDecision
 
 logger = logging.getLogger(__name__)
@@ -156,16 +156,20 @@ class AdaptiveVisualSampler:
         frames_per_second: float = 1.5,
         probe_interval_seconds: float = 4.0,
         refine_window_seconds: float = 12.0,
+        refine_interval_seconds: float | None = None,
         scene_threshold: float = 0.28,
         skip_nonref_frames: bool = False,
         frame_reader: FrameReader | None = None,
     ) -> None:
         if probe_interval_seconds <= 0 or refine_window_seconds <= 0:
             raise ValueError("probe and refine windows must be positive")
+        if refine_interval_seconds is not None and refine_interval_seconds <= 0:
+            raise ValueError("refine interval must be positive")
         self._scanner = scanner
         self._frames_per_second = frames_per_second
         self._probe_interval = probe_interval_seconds
         self._refine_window = refine_window_seconds
+        self._refine_interval = refine_interval_seconds
         self._scene_threshold = scene_threshold
         self._frame_reader = frame_reader
         self._interval = 1 / frames_per_second
@@ -178,7 +182,7 @@ class AdaptiveVisualSampler:
         )
 
     def sample(self, media_path: Path) -> Iterable[SampledFrame]:
-        hits = []
+        hits: list[tuple[float, tuple[BoundingBox, ...]]] = []
         probed = 0
         for frame in self._probe.sample(media_path):
             probed += 1
@@ -198,7 +202,7 @@ class AdaptiveVisualSampler:
             )
             if not decision.accepted:
                 continue
-            hits.append(frame.timestamp)
+            hits.append((frame.timestamp, decision.boxes))
         windows = self._windows(hits)
         if not windows:
             logger.info(
@@ -214,18 +218,30 @@ class AdaptiveVisualSampler:
             len(hits),
             media_path.name,
             ", ".join(
-                f"{format_timecode(start)}-{format_timecode(end)}"
-                for start, end in windows
+                f"{format_timecode(start)}-{format_timecode(end)} crops={len(boxes)}"
+                for start, end, boxes in windows
             ),
         )
-        dense = FrameSampler(
-            frames_per_second=self._frames_per_second,
-            scene_threshold=self._scene_threshold,
-            frame_reader=self._frame_reader,
-            allowed_windows=windows,
-            skip_nonref_frames=self._skip_nonref_frames,
-        )
-        yield from dense.sample(media_path)
+        dense_kwargs: dict[str, Any] = {
+            "scene_threshold": 1.0 if self._refine_interval is not None else self._scene_threshold,
+            "frame_reader": self._frame_reader,
+            "allowed_windows": tuple((start, end) for start, end, _boxes in windows),
+            "skip_nonref_frames": self._skip_nonref_frames,
+        }
+        if self._refine_interval is not None:
+            dense = FrameSampler(interval_seconds=self._refine_interval, **dense_kwargs)
+        else:
+            dense = FrameSampler(
+                frames_per_second=self._frames_per_second,
+                **dense_kwargs,
+            )
+        for frame in dense.sample(media_path):
+            yield SampledFrame(
+                frame.timestamp,
+                frame.image,
+                frame.scene_change,
+                self._hints(windows, frame.timestamp),
+            )
 
     def _inspect(self, image: Any) -> PresenceDecision:
         inspect = getattr(self._scanner, "inspect", None)
@@ -244,17 +260,48 @@ class AdaptiveVisualSampler:
         if close is not None:
             close()
 
-    def _windows(self, hits: Sequence[float]) -> tuple[tuple[float, float], ...]:
+    def _windows(
+        self,
+        hits: Sequence[tuple[float, tuple[BoundingBox, ...]]],
+    ) -> tuple[tuple[float, float, tuple[BoundingBox, ...]], ...]:
         if not hits:
             return ()
         expanded = sorted(
-            (max(0.0, timestamp - self._refine_window), timestamp + self._refine_window)
-            for timestamp in hits
+            (
+                max(0.0, timestamp - self._refine_window),
+                timestamp + self._refine_window,
+                boxes,
+            )
+            for timestamp, boxes in hits
         )
-        merged: list[list[float]] = [list(expanded[0])]
-        for start, end in expanded[1:]:
+        merged: list[list[Any]] = [
+            [expanded[0][0], expanded[0][1], list(expanded[0][2])]
+        ]
+        for start, end, boxes in expanded[1:]:
             if start <= merged[-1][1]:
                 merged[-1][1] = max(merged[-1][1], end)
+                merged[-1][2].extend(boxes)
             else:
-                merged.append([start, end])
-        return tuple((start, end) for start, end in merged)
+                merged.append([start, end, list(boxes)])
+        return tuple(
+            (float(start), float(end), self._dedupe_boxes(tuple(boxes)))
+            for start, end, boxes in merged
+        )
+
+    @staticmethod
+    def _hints(
+        windows: tuple[tuple[float, float, tuple[BoundingBox, ...]], ...],
+        timestamp: float,
+    ) -> tuple[BoundingBox, ...]:
+        for start, end, boxes in windows:
+            if start <= timestamp <= end:
+                return boxes
+        return ()
+
+    @staticmethod
+    def _dedupe_boxes(boxes: tuple[BoundingBox, ...]) -> tuple[BoundingBox, ...]:
+        selected: list[BoundingBox] = []
+        for box in sorted(boxes, key=lambda item: item.area, reverse=True):
+            if all(box.intersection_over_union(other) < 0.8 for other in selected):
+                selected.append(box)
+        return tuple(selected)

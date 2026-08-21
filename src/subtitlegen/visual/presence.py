@@ -8,7 +8,12 @@ import numpy as np
 
 from subtitlegen.visual.detection import TextDetector
 from subtitlegen.visual.models import BoundingBox
-from subtitlegen.visual.ocr import OcrEngine, contains_japanese, rotate_vertical_crop
+from subtitlegen.visual.ocr import (
+    OcrEngine,
+    contains_japanese,
+    has_title_script,
+    rotate_vertical_crop,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,11 +24,11 @@ class PresenceDecision:
     recognized: tuple[str, ...]
     skipped_crops: int = 0
     orientations: tuple[str, ...] = ()
-    orientations: tuple[str, ...] = ()
+    boxes: tuple[BoundingBox, ...] = ()
 
 
 class JapaneseCharacterScanner:
-    """Downscale a frame, detect text, and accept it if any crop is Japanese."""
+    """Downscale a frame, detect text, and accept tight Japanese title crops."""
 
     def __init__(
         self,
@@ -51,6 +56,7 @@ class JapaneseCharacterScanner:
         array = np.asarray(image)
         if array.size == 0:
             return PresenceDecision(False, "empty_frame", 0, ())
+        frame_height, frame_width = array.shape[:2]
         prepared, scale = self._prepare(array)
         boxes = tuple(self._detector.detect(prepared))
         if not boxes:
@@ -59,6 +65,8 @@ class JapaneseCharacterScanner:
         inspected = ranked[: self._maximum_crops]
         recognized: list[str] = []
         orientations: list[str] = []
+        hit_boxes: list[BoundingBox] = []
+        weak = False
         for box in inspected:
             crop = self._crop(array, box, scale)
             if crop.size == 0:
@@ -68,21 +76,29 @@ class JapaneseCharacterScanner:
             text, orientation = self._recognize(crop, box)
             recognized.append(text)
             orientations.append(orientation)
-            if contains_japanese(text):
-                return PresenceDecision(
-                    True,
-                    "hit",
-                    len(boxes),
-                    tuple(recognized),
-                    skipped_crops=max(0, len(ranked) - len(inspected)),
-                    orientations=tuple(orientations),
-                )
+            if has_title_script(text):
+                mapped = self._original_box(box, scale, frame_width, frame_height)
+                if mapped is not None:
+                    hit_boxes.append(mapped)
+            elif contains_japanese(text):
+                weak = True
+        skipped = max(0, len(ranked) - len(inspected))
+        if hit_boxes:
+            return PresenceDecision(
+                True,
+                "hit",
+                len(boxes),
+                tuple(recognized),
+                skipped_crops=skipped,
+                orientations=tuple(orientations),
+                boxes=tuple(hit_boxes),
+            )
         return PresenceDecision(
             False,
-            "no_japanese",
+            "weak_japanese" if weak else "no_japanese",
             len(boxes),
             tuple(recognized),
-            skipped_crops=max(0, len(ranked) - len(inspected)),
+            skipped_crops=skipped,
             orientations=tuple(orientations),
         )
 
@@ -127,3 +143,18 @@ class JapaneseCharacterScanner:
         width = max(1, round(box.width * scale))
         height = max(1, round(box.height * scale))
         return image[y : y + height, x : x + width]
+
+    @staticmethod
+    def _original_box(
+        box: BoundingBox,
+        scale: float,
+        frame_width: int,
+        frame_height: int,
+    ) -> BoundingBox | None:
+        x = max(0, round(box.x * scale))
+        y = max(0, round(box.y * scale))
+        width = min(frame_width - x, max(1, round(box.width * scale)))
+        height = min(frame_height - y, max(1, round(box.height * scale)))
+        if width <= 0 or height <= 0:
+            return None
+        return BoundingBox(x, y, width, height, box.score)
