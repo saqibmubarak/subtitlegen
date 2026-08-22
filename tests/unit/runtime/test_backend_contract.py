@@ -80,6 +80,7 @@ def _mlx_result(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         lambda: ParakeetBackend(
             AsrSettings(),
             model_factory=lambda _name: ParakeetModel(),
+            audio_loader=lambda _path: np.zeros(16_000, dtype=np.float32),
         ),
     ],
     ids=["faster-whisper", "mlx", "whisperx", "parakeet"],

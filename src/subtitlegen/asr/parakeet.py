@@ -9,11 +9,13 @@ from subtitlegen.asr.capabilities import BackendCapabilities
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.domain.models import Transcription, Word
 from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
+from subtitlegen.media import load_audio_mono
 from subtitlegen.settings import AsrSettings
 
 logger = logging.getLogger(__name__)
 
 ModelFactory = Callable[[str], Any]
+AudioLoader = Callable[[Path], Any]
 
 
 class ParakeetBackend:
@@ -26,9 +28,11 @@ class ParakeetBackend:
         settings: AsrSettings,
         *,
         model_factory: ModelFactory | None = None,
+        audio_loader: AudioLoader = load_audio_mono,
     ) -> None:
         self._settings = settings
         self._model_factory = model_factory
+        self._audio_loader = audio_loader
         self._model: Any | None = None
 
     @property
@@ -52,9 +56,12 @@ class ParakeetBackend:
                 "Parakeet cannot consume ASR prompts or hotwords; "
                 "glossary correction still runs after transcription"
             )
+        # NeMo's Lhotse loader keeps stereo as (batch, channels, time). Parakeet
+        # expects (batch, time); channel_selector="average" is broken in NeMo 3.
+        audio = self._audio_loader(media_path)
         try:
             hypotheses = self._load_model().transcribe(
-                [str(media_path)],
+                [audio],
                 batch_size=1,
                 timestamps=True,
             )

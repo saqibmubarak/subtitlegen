@@ -53,8 +53,9 @@ services:
       dockerfile: Dockerfile.nemo
     environment:
       <<: *subtitlegen-environment
+      # english-fast selects Parakeet. Do not also set BACKEND; the CLI forbids both.
       SUBTITLEGEN_PRESET: english-fast
-      SUBTITLEGEN_BACKEND: parakeet
+      SUBTITLEGEN_BACKEND: auto
     volumes: *subtitlegen-volumes
     deploy:
       <<: *gpu

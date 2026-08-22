@@ -1,7 +1,9 @@
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
 from subtitlegen.asr.context import AsrContext
@@ -9,13 +11,15 @@ from subtitlegen.asr.parakeet import ParakeetBackend
 from subtitlegen.errors import BackendOutOfMemoryError
 from subtitlegen.settings import AsrSettings
 
+SILENCE = np.zeros(16_000, dtype=np.float32)
+
 
 class FakeModel:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def transcribe(self, _paths: list[str], **kwargs: Any) -> list[Any]:
-        self.calls.append(kwargs)
+    def transcribe(self, audio: list[Any], **kwargs: Any) -> list[Any]:
+        self.calls.append({"audio": audio, **kwargs})
         return [
             SimpleNamespace(
                 timestamp={
@@ -40,7 +44,11 @@ def test_parakeet_normalizes_timestamps_reuses_and_releases_model(tmp_path: Path
         created.append(FakeModel())
         return created[-1]
 
-    backend = ParakeetBackend(AsrSettings(model="large-v3-turbo"), model_factory=factory)
+    backend = ParakeetBackend(
+        AsrSettings(model="large-v3-turbo"),
+        model_factory=factory,
+        audio_loader=lambda _path: SILENCE,
+    )
     result = backend.transcribe(media)
     backend.transcribe(media)
 
@@ -48,7 +56,9 @@ def test_parakeet_normalizes_timestamps_reuses_and_releases_model(tmp_path: Path
     assert result.language == "en"
     assert result.duration == 1.4
     assert names == [ParakeetBackend.DEFAULT_MODEL]
-    assert created[0].calls[0] == {"batch_size": 1, "timestamps": True}
+    assert created[0].calls[0]["batch_size"] == 1
+    assert created[0].calls[0]["timestamps"] is True
+    assert created[0].calls[0]["audio"][0] is SILENCE
     assert not backend.capabilities.context_prompt
 
     backend.close()
@@ -59,7 +69,11 @@ def test_parakeet_normalizes_timestamps_reuses_and_releases_model(tmp_path: Path
 def test_parakeet_ignores_decoder_context_and_rejects_non_english(tmp_path: Path) -> None:
     media = tmp_path / "clip.wav"
     media.touch()
-    backend = ParakeetBackend(AsrSettings(), model_factory=lambda _name: FakeModel())
+    backend = ParakeetBackend(
+        AsrSettings(),
+        model_factory=lambda _name: FakeModel(),
+        audio_loader=lambda _path: SILENCE,
+    )
     with pytest.raises(ValueError, match="English"):
         backend.transcribe(media, language="ja")
     result = backend.transcribe(media, context=AsrContext("Buggy"))
@@ -72,6 +86,26 @@ def test_parakeet_ignores_decoder_context_and_rejects_non_english(tmp_path: Path
             raise RuntimeError("CUDA out of memory")
 
     with pytest.raises(BackendOutOfMemoryError, match="close other GPU"):
-        ParakeetBackend(AsrSettings(), model_factory=lambda _name: OomModel()).transcribe(
-            media
-        )
+        ParakeetBackend(
+            AsrSettings(),
+            model_factory=lambda _name: OomModel(),
+            audio_loader=lambda _path: SILENCE,
+        ).transcribe(media)
+
+
+def test_parakeet_downmixes_stereo_media_before_nemo(tmp_path: Path) -> None:
+    media = tmp_path / "stereo.wav"
+    with wave.open(str(media), "wb") as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(8_000)
+        output.writeframes(b"\0\0" * 8_000 * 2)
+
+    model = FakeModel()
+    ParakeetBackend(AsrSettings(), model_factory=lambda _name: model).transcribe(media)
+
+    audio = model.calls[0]["audio"][0]
+    assert isinstance(audio, np.ndarray)
+    assert audio.ndim == 1
+    assert audio.dtype == np.float32
+    assert 15_900 <= audio.size <= 16_100
