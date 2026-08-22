@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -70,18 +71,22 @@ class ParakeetBackend:
         # expects (batch, time); channel_selector="average" is broken in NeMo 3.
         audio = self._audio_loader(media_path)
         duration = len(audio) / SAMPLE_RATE
-        words = self._transcribe_windows(
-            audio,
-            offset=0.0,
-            window_seconds=self._window_seconds,
-        )
+        try:
+            words = self._transcribe_windows(
+                audio,
+                offset=0.0,
+                window_seconds=self._window_seconds,
+            )
+        finally:
+            # A CUDA fault poisons the process; later files fail instantly
+            # unless the model and cache are dropped between episodes.
+            self.close()
         words.sort(key=lambda word: (word.start, word.end))
         logger.info(
             "asr-parakeet duration=%.1fs words=%d",
             duration,
             len(words),
         )
-        _release_cuda()
         return Transcription(words=tuple(words), language="en", duration=duration)
 
     def close(self) -> None:
@@ -101,15 +106,11 @@ class ParakeetBackend:
         words: list[Word] = []
         for index, (local_offset, chunk, is_last) in enumerate(windows):
             try:
-                hypothesis = self._load_model().transcribe(
-                    [chunk],
-                    batch_size=1,
-                    timestamps=True,
-                )[0]
-            except RuntimeError as error:
-                if "out of memory" not in str(error).casefold():
+                hypothesis = self._decode_chunk(chunk, allow_cuda_retry=True)
+            except Exception as error:
+                if not _is_oom(error):
                     raise
-                _release_cuda()
+                self.close()
                 smaller = window_seconds / 2
                 if smaller < MIN_WINDOW_SECONDS:
                     raise BackendOutOfMemoryError(
@@ -140,6 +141,23 @@ class ParakeetBackend:
                 )
             )
         return words
+
+    def _decode_chunk(self, chunk: Any, *, allow_cuda_retry: bool) -> Any:
+        try:
+            return self._load_model().transcribe(
+                [chunk],
+                batch_size=1,
+                timestamps=True,
+                verbose=False,
+            )[0]
+        except Exception as error:
+            if _is_oom(error) or not _is_cuda_fault(error):
+                raise
+            self.close()
+            if not allow_cuda_retry:
+                raise
+            logger.warning("Parakeet CUDA fault; reloading model and retrying window")
+            return self._decode_chunk(chunk, allow_cuda_retry=False)
 
     def _load_model(self) -> Any:
         if self._model is not None:
@@ -219,10 +237,31 @@ def _keep_window_words(
     return tuple(kept)
 
 
+def _is_oom(error: BaseException) -> bool:
+    return "out of memory" in str(error).casefold()
+
+
+def _is_cuda_fault(error: BaseException) -> bool:
+    text = str(error).casefold()
+    name = type(error).__name__.casefold()
+    return (
+        _is_oom(error)
+        or "illegal memory access" in text
+        or "acceleratorerror" in name
+        or "cudaerror" in name
+    )
+
+
 def _release_cuda() -> None:
+    gc.collect()
     try:
         import torch
     except ImportError:
         return
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    if not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.synchronize()
+    except Exception:
+        pass
+    torch.cuda.empty_cache()
