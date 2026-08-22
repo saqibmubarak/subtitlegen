@@ -129,7 +129,8 @@ Use **forward slashes** (`C:/Users/you/Videos/Dressrosa`). A backslash before
 | `SUBTITLEGEN_VISUAL_REFINE_SECONDS` | Window around a hit | `12` |
 | `SUBTITLEGEN_ENRICH_GLOSSARY` | Wikipedia name fetch | `1` |
 | `SUBTITLEGEN_OVERWRITE` | Rebuild existing SRT (dialogue only) | `0`, or `1` to regenerate |
-| `SUBTITLEGEN_REUSE_SRT` | Titles-only: never run ASR | `1` on `windows-titles` |
+| `SUBTITLEGEN_REUSE_SRT` | Never ASR; require an existing SRT | `1` on `windows-titles` |
+| `SUBTITLEGEN_TITLES_ONLY` | Never ASR; OCR even without an SRT | unset, or `1` for titles only |
 
 Videos are always **`/data/videos` inside the container**. Do not pass
 `D:\...` as the `generate` path.
@@ -173,7 +174,8 @@ A full-episode tensor OOMs; if a batch does, it splits and retries.
 
 `windows-titles` passes `--reuse-srt`, so it never loads WhisperX or Parakeet.
 It only OCRs files that already have a valid Parakeet `.srt`. Overwrite on the
-title image cannot replace that dialogue.
+title image cannot replace that dialogue. `--titles-only` is the local option
+when you want on-screen text without dialogue: no ASR, SRT optional.
 
 | Profile | Command | What it does |
 |---|---|---|
@@ -253,7 +255,8 @@ subtitlegen generate PATH
     --cache-dir .subtitlegen
     --output-dir DIR          # default: beside each video
     --overwrite               # rebuild SRT (and then ASS)
-    --reuse-srt               # never ASR; titles from existing SRT only
+    --reuse-srt               # never ASR; require an existing SRT
+    --titles-only             # never ASR; OCR even if there is no SRT
     --profile one-piece       # else inferred from the path
     --profiles-dir DIR
     --arc Dressrosa --episode 03
@@ -333,7 +336,7 @@ CLI `--preset` **overrides** `model_name` from this file.
 |---|---|
 | `.srt` | File exists and parses as valid SRT |
 | ASR job under `--cache-dir/jobs` | Same backend + model + decode key |
-| Visual job | Same detector, OCR, NLLB, profile, and `title-scan-v7` key |
+| Visual job | Same detector, OCR, NLLB, profile, and `title-scan-v8` key |
 
 `--overwrite` rebuilds the SRT (and then the ASS). Changing the visual cache
 key (detector, glossary, scan version) rebuilds titles even if the SRT is
@@ -343,10 +346,12 @@ kept.
 
 ## On-screen titles (current behavior)
 
-Default **on**. Probe every 4 s and on cuts for title-script; refine at 1 s
-with a fresh detect (boxes are not frozen). Horizontal cards: furigana mask +
-Paddle rec. Manga OCR only for tall vertical crops. Translation: profile
-`visual_translations` first, then local NLLB-200 600M.
+Default **on**. Probe every 4 s for title-script; scene cuts keep a signature
+for refine but do not run OCR. Refine seeks those windows at 1 s with a fresh
+detect (boxes are not frozen). Horizontal cards: furigana mask + Paddle rec.
+Manga OCR only for tall vertical crops. Translation: profile
+`visual_translations` first, then one batched local NLLB-200 600M pass on the
+unique title strings.
 
 NLLB’s license is **non-commercial** for many uses. See
 [docs/10-model-licenses.md](docs/10-model-licenses.md).

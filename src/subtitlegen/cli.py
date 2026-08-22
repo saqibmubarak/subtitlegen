@@ -255,6 +255,9 @@ def _visual_service(
     probe_interval_seconds: float = 4.0,
     refine_window_seconds: float = 12.0,
 ) -> MultimodalSubtitleService:
+    from subtitlegen.visual.ocr import warmup_torch
+
+    warmup_torch()
     visual_settings = VisualPipelineSettings(
         frames_per_second=frames_per_second,
         probe_interval_seconds=probe_interval_seconds,
@@ -320,7 +323,7 @@ def _visual_service(
         NllbLocalTranslator.DEFAULT_MODEL,
         profile,
         visual_settings.cache_identity(),
-        "title-scan-v7",
+        "title-scan-v8",
     )
     visual_key = "visual-" + hashlib.sha256(repr(visual_data).encode()).hexdigest()[:12]
     store = PortableJobStore(cache_dir / "jobs")
@@ -394,6 +397,10 @@ def generate(
         bool,
         typer.Option("--reuse-srt/--transcribe", envvar="SUBTITLEGEN_REUSE_SRT"),
     ] = False,
+    titles_only: Annotated[
+        bool,
+        typer.Option("--titles-only", envvar="SUBTITLEGEN_TITLES_ONLY"),
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
     """Generate SRT files recursively, resuming valid cached stages."""
@@ -413,7 +420,9 @@ def generate(
     scoped = resolved.identity if not input_path.is_dir() else None
     selected_arc = arc or (scoped.arc if scoped is not None else None)
     selected_episode = episode or (scoped.episode if scoped is not None else None)
-    use_visual = True if visual_text is None else visual_text
+    if titles_only and visual_text is False:
+        raise typer.BadParameter("--titles-only cannot be combined with --no-visual-text")
+    use_visual = True if titles_only or visual_text is None else visual_text
     if series_profile is not None:
         logger.info(
             "glossary %s (%s) has %d terms",
@@ -427,7 +436,7 @@ def generate(
     )
 
     failures = 0
-    generated: list[tuple[Path, Path]] = []
+    generated: list[tuple[Path, Path | None]] = []
     input_root = input_path.resolve()
 
     def output_for(video: Path) -> Path:
@@ -439,12 +448,19 @@ def generate(
 
     jobs = [(video, output_for(video)) for video in videos]
 
-    if reuse_srt:
-        logger.info("reusing existing dialogue SRT; ASR is disabled")
+    if titles_only or reuse_srt:
+        logger.info(
+            "titles only; ASR is disabled"
+            if titles_only
+            else "reusing existing dialogue SRT; ASR is disabled"
+        )
         for video, output in jobs:
             if is_valid_srt(output):
                 generated.append((video, output))
                 logger.info("reused: %s", output)
+            elif titles_only:
+                generated.append((video, None))
+                logger.info("titles without dialogue SRT: %s", video)
             else:
                 failures += 1
                 logger.error("no dialogue SRT for %s", video)
@@ -527,12 +543,25 @@ def generate(
             visual_refine_seconds,
         )
         try:
-            for video, dialogue_output in generated:
+            prefetch = getattr(multimodal, "prefetch_probe", None)
+            videos = [video for video, _dialogue in generated]
+            if prefetch is not None:
+                for video in videos[:2]:
+                    prefetch(video)
+            for index, (video, dialogue_output) in enumerate(generated):
+                if prefetch is not None:
+                    for video_ahead in videos[index + 1 : index + 3]:
+                        prefetch(video_ahead)
                 try:
+                    ass_output = (
+                        dialogue_output.with_suffix(".ass")
+                        if dialogue_output is not None
+                        else output_for(video).with_suffix(".ass")
+                    )
                     visual_result = multimodal.process(
                         video,
                         dialogue_output,
-                        dialogue_output.with_suffix(".ass"),
+                        ass_output,
                     )
                     logger.info(
                         "generated: %s with %d visual events",

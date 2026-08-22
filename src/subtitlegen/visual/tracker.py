@@ -76,7 +76,7 @@ class VisualEventTracker:
         for track in tracks:
             last = track[-1]
             if len(track) < self._min_observations:
-                logger.info(
+                logger.debug(
                     "title-track drop %s observations=%d need=%d text=%r translation=%r",
                     format_timecode(track[0].timestamp),
                     len(track),
@@ -94,7 +94,7 @@ class VisualEventTracker:
                     box=last.box,
                 )
             )
-            logger.info(
+            logger.debug(
                 "title-track keep %s-%s observations=%d text=%r translation=%r",
                 format_timecode(track[0].timestamp),
                 format_timecode(last.timestamp + self._frame_interval),

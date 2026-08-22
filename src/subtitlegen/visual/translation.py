@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from difflib import SequenceMatcher
 from typing import Any, Protocol
 
@@ -38,19 +38,41 @@ class NllbLocalTranslator:
         self._cache: dict[str, str] = {}
 
     def translate(self, text: str) -> str:
-        source = text.strip()
-        if not source:
-            raise ValueError("translation source text must not be blank")
-        if source in self._cache:
-            return self._cache[source]
-        if self._profile is not None:
-            known_translation = self._profile_translation(source)
-            if known_translation is not None:
-                self._cache[source] = known_translation
-                return known_translation
+        return self.translate_many((text,))[0]
+
+    def translate_many(self, texts: Sequence[str]) -> list[str]:
+        if not texts:
+            return []
+        results: list[str | None] = [None] * len(texts)
+        pending: list[tuple[int, str]] = []
+        for index, raw in enumerate(texts):
+            source = raw.strip()
+            if not source:
+                raise ValueError("translation source text must not be blank")
+            cached = self._cache.get(source)
+            if cached is not None:
+                results[index] = cached
+                continue
+            if self._profile is not None:
+                known_translation = self._profile_translation(source)
+                if known_translation is not None:
+                    self._cache[source] = known_translation
+                    results[index] = known_translation
+                    continue
+            pending.append((index, source))
+        unique = list(dict.fromkeys(source for _index, source in pending))
+        if unique:
+            translated = self._generate_batch(unique)
+            for source, result in zip(unique, translated, strict=True):
+                self._cache[source] = result
+            for index, source in pending:
+                results[index] = self._cache[source]
+        return [item if item is not None else "" for item in results]
+
+    def _generate_batch(self, sources: list[str]) -> list[str]:
         tokenizer, model = self._load_model()
         try:
-            inputs = tokenizer(source, return_tensors="pt")
+            inputs = tokenizer(sources, return_tensors="pt", padding=True)
             if self._device != "cpu":
                 inputs = {key: value.to(self._device) for key, value in inputs.items()}
             translated = model.generate(
@@ -58,25 +80,31 @@ class NllbLocalTranslator:
                 forced_bos_token_id=tokenizer.convert_tokens_to_ids("eng_Latn"),
                 max_new_tokens=128,
             )
-            result = str(tokenizer.batch_decode(translated, skip_special_tokens=True)[0]).strip()
+            decoded = [
+                str(text).strip()
+                for text in tokenizer.batch_decode(translated, skip_special_tokens=True)
+            ]
         except RuntimeError as error:
             if "out of memory" in str(error).casefold():
                 raise BackendOutOfMemoryError(
                     "NLLB exhausted memory; run translation on CPU after releasing ASR"
                 ) from error
             raise
-        if not result:
+        if len(decoded) != len(sources) or any(not text for text in decoded):
             raise RuntimeError("NLLB returned an empty translation")
-        if self._profile is not None:
-            result = GlossaryNormalizer().normalize(result, self._profile)
-            safe_terms = tuple(
-                entry.canonical
-                for entry in self._profile.terms
-                if entry.normalize_aliases and entry.normalize_canonical
-            )
-            result = ConservativeLocalCorrector().correct(result, glossary=safe_terms)
-        self._cache[source] = result
-        return result
+        if self._profile is None:
+            return decoded
+        normalizer = GlossaryNormalizer()
+        corrector = ConservativeLocalCorrector()
+        safe_terms = tuple(
+            entry.canonical
+            for entry in self._profile.terms
+            if entry.normalize_aliases and entry.normalize_canonical
+        )
+        return [
+            corrector.correct(normalizer.normalize(text, self._profile), glossary=safe_terms)
+            for text in decoded
+        ]
 
     def _profile_translation(self, source: str) -> str | None:
         if self._profile is None:

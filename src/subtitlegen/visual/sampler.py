@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import Any, Protocol
+from queue import Empty, Queue
+from threading import Event, Thread
+from typing import Any, Protocol, cast
 
 import numpy as np
 
 from subtitlegen.media import format_timecode
+from subtitlegen.runtime.executor import DECODE_PREFETCH
 from subtitlegen.visual.models import BoundingBox, SampledFrame
 from subtitlegen.visual.presence import PresenceDecision
 
 logger = logging.getLogger(__name__)
+
+PROBE_PREFETCH_LIMIT = 2
 
 
 class FrameReader(Protocol):
@@ -39,6 +44,7 @@ class FrameSampler:
         frame_reader: FrameReader | None = None,
         allowed_windows: tuple[tuple[float, float], ...] | None = None,
         skip_nonref_frames: bool = False,
+        emit_scene_images: bool = True,
     ) -> None:
         if interval_seconds is not None:
             if interval_seconds <= 0:
@@ -54,6 +60,7 @@ class FrameSampler:
         self._frame_reader = frame_reader
         self._allowed_windows = allowed_windows
         self._skip_nonref_frames = skip_nonref_frames
+        self._emit_scene_images = emit_scene_images
 
     def sample(self, media_path: Path) -> Iterable[SampledFrame]:
         if not media_path.is_file():
@@ -85,10 +92,27 @@ class FrameSampler:
             regular = timestamp + 1e-6 >= next_regular
             if regular:
                 next_regular = timestamp + self._interval
-            if (regular or scene_change) and self._in_window(timestamp):
-                yield SampledFrame(max(0.0, timestamp), image, scene_change)
+            if not self._in_window(timestamp):
+                continue
+            if regular:
+                yield SampledFrame(
+                    max(0.0, timestamp),
+                    image,
+                    scene_change,
+                    interval=True,
+                )
+            elif scene_change and self._emit_scene_images:
+                yield SampledFrame(
+                    max(0.0, timestamp),
+                    image,
+                    True,
+                    interval=False,
+                )
 
     def _sample_video(self, media_path: Path) -> Iterable[SampledFrame]:
+        if self._allowed_windows:
+            yield from self._sample_video_windows(media_path)
+            return
         try:
             import av
         except ImportError as error:
@@ -111,6 +135,7 @@ class FrameSampler:
                 scan_scene = timestamp + 1e-6 >= next_scene_scan
                 if not regular and not scan_scene:
                     continue
+                scene_change = False
                 if scan_scene:
                     next_scene_scan = timestamp + 0.25
                     signature = self._frame_signature(frame)
@@ -120,16 +145,65 @@ class FrameSampler:
                         >= self._scene_threshold
                     )
                     previous_signature = signature
-                else:
-                    scene_change = False
                 if regular:
                     next_regular = timestamp + self._interval
-                if regular or scene_change:
                     yield SampledFrame(
                         max(0.0, timestamp),
                         frame.to_ndarray(format="rgb24"),
                         scene_change,
+                        interval=True,
                     )
+                elif scene_change and self._emit_scene_images:
+                    yield SampledFrame(
+                        max(0.0, timestamp),
+                        frame.to_ndarray(format="rgb24"),
+                        True,
+                        interval=False,
+                    )
+
+    def _sample_video_windows(self, media_path: Path) -> Iterable[SampledFrame]:
+        try:
+            import av
+        except ImportError as error:
+            raise RuntimeError("PyAV is required for frame sampling") from error
+        windows = self._allowed_windows or ()
+        with av.open(str(media_path)) as container:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            if self._skip_nonref_frames:
+                stream.codec_context.skip_frame = "NONREF"
+            if stream.time_base is None:
+                return
+            for start, end in windows:
+                yield from self._decode_seek_window(container, stream, start, end)
+
+    def _decode_seek_window(
+        self,
+        container: Any,
+        stream: Any,
+        start: float,
+        end: float,
+    ) -> Iterable[SampledFrame]:
+        offset = int(max(0.0, start) / stream.time_base)
+        container.seek(offset, stream=stream, backward=True)
+        next_regular = start
+        for frame in container.decode(stream):
+            if frame.pts is None or stream.time_base is None:
+                continue
+            timestamp = float(frame.pts * stream.time_base)
+            if timestamp + 1e-6 < start:
+                continue
+            if timestamp > end + 1e-6:
+                break
+            if timestamp + 1e-6 < next_regular:
+                continue
+            next_regular = timestamp + self._interval
+            yield SampledFrame(
+                max(0.0, timestamp),
+                frame.to_ndarray(format="rgb24"),
+                False,
+                interval=True,
+            )
 
     @staticmethod
     def _frame_signature(frame: Any) -> np.ndarray[Any, Any]:
@@ -144,6 +218,56 @@ class FrameSampler:
         if array.ndim == 3:
             array = array.mean(axis=2)
         return array[::16, ::16] / 255.0
+
+
+class _ProbePrefetch:
+    def __init__(self, media_path: Path) -> None:
+        self.path = media_path
+        self._queue: Queue[SampledFrame | None] = Queue(maxsize=DECODE_PREFETCH)
+        self._error: BaseException | None = None
+        self._cancelled = Event()
+        self._thread: Thread | None = None
+
+    def start(self, decode: Any) -> None:
+        self._thread = Thread(
+            target=self._run,
+            args=(decode,),
+            name="title-probe-prefetch",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self, decode: Any) -> None:
+        try:
+            for frame in decode(self.path):
+                if self._cancelled.is_set():
+                    break
+                self._queue.put(frame)
+        except BaseException as error:
+            self._error = error
+        finally:
+            self._queue.put(None)
+
+    def frames(self) -> Iterator[SampledFrame]:
+        while True:
+            item = self._queue.get()
+            if item is None:
+                if self._error is not None:
+                    raise self._error
+                return
+            yield item
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except Empty:
+                break
+            if item is None:
+                break
+        if self._thread is not None:
+            self._thread.join(timeout=1)
 
 
 class AdaptiveVisualSampler:
@@ -174,54 +298,90 @@ class AdaptiveVisualSampler:
         self._frame_reader = frame_reader
         self._interval = 1 / frames_per_second
         self._skip_nonref_frames = skip_nonref_frames
+        self._prefetches: dict[Path, _ProbePrefetch] = {}
+        self.probe_count = 0
+        self.hit_count = 0
+        self.window_count = 0
+        self.refine_count = 0
         self._probe = FrameSampler(
             interval_seconds=probe_interval_seconds,
             scene_threshold=scene_threshold,
             frame_reader=frame_reader,
             skip_nonref_frames=skip_nonref_frames,
+            emit_scene_images=False,
         )
 
     def sample(self, media_path: Path) -> Iterable[SampledFrame]:
         hits: list[tuple[float, tuple[BoundingBox, ...]]] = []
-        probed = 0
-        for frame in self._probe.sample(media_path):
-            probed += 1
-            decision = self._inspect(frame.image)
-            kind = "scene-change" if frame.scene_change else "interval"
-            logger.info(
-                "title-probe %s t=%.3f kind=%s decision=%s boxes=%d skipped_crops=%d "
-                "orientation=%s rec=%s",
-                format_timecode(frame.timestamp),
-                frame.timestamp,
-                kind,
-                decision.reason,
-                decision.box_count,
-                decision.skipped_crops,
-                list(decision.orientations),
-                list(decision.recognized),
-            )
-            if not decision.accepted:
-                continue
-            hits.append((frame.timestamp, decision.boxes))
-        windows = self._windows(hits)
+        for frame in self.iter_probe_frames(media_path):
+            decision = self.inspect_frame(frame)
+            if decision.accepted:
+                hits.append((frame.timestamp, decision.boxes))
+        windows = self.windows_from_hits(hits)
         if not windows:
-            logger.info(
-                "title-windows none after %d probe(s) in %s",
-                probed,
-                media_path.name,
-            )
             return
-        logger.info(
-            "title-windows %d from %d probe(s) / %d hit(s) in %s: %s",
+        yield from self.iter_refine_frames(media_path, windows)
+
+    def iter_probe_frames(self, media_path: Path) -> Iterable[SampledFrame]:
+        self.probe_count = 0
+        for frame in self._consume_probe(media_path):
+            if not frame.interval:
+                logger.debug(
+                    "title-probe %s t=%.3f kind=scene-change decision=signature_only",
+                    format_timecode(frame.timestamp),
+                    frame.timestamp,
+                )
+                continue
+            self.probe_count += 1
+            yield frame
+
+    def inspect_frame(self, frame: SampledFrame) -> PresenceDecision:
+        decision = self._inspect(frame.image)
+        logger.debug(
+            "title-probe %s t=%.3f kind=%s decision=%s boxes=%d skipped_crops=%d "
+            "orientation=%s rec=%s",
+            format_timecode(frame.timestamp),
+            frame.timestamp,
+            "scene-change" if frame.scene_change else "interval",
+            decision.reason,
+            decision.box_count,
+            decision.skipped_crops,
+            list(decision.orientations),
+            list(decision.recognized),
+        )
+        return decision
+
+    def windows_from_hits(
+        self,
+        hits: Sequence[tuple[float, tuple[BoundingBox, ...]]],
+    ) -> tuple[tuple[float, float, tuple[BoundingBox, ...]], ...]:
+        windows = self._windows(hits)
+        self.hit_count = len(hits)
+        self.window_count = len(windows)
+        if not windows:
+            logger.debug(
+                "title-windows none after %d probe(s)",
+                self.probe_count,
+            )
+            return windows
+        logger.debug(
+            "title-windows %d from %d probe(s) / %d hit(s): %s",
             len(windows),
-            probed,
+            self.probe_count,
             len(hits),
-            media_path.name,
             ", ".join(
                 f"{format_timecode(start)}-{format_timecode(end)} crops={len(boxes)}"
                 for start, end, boxes in windows
             ),
         )
+        return windows
+
+    def iter_refine_frames(
+        self,
+        media_path: Path,
+        windows: tuple[tuple[float, float, tuple[BoundingBox, ...]], ...],
+    ) -> Iterable[SampledFrame]:
+        self.refine_count = 0
         dense_kwargs: dict[str, Any] = {
             "scene_threshold": 1.0 if self._refine_interval is not None else self._scene_threshold,
             "frame_reader": self._frame_reader,
@@ -236,17 +396,37 @@ class AdaptiveVisualSampler:
                 **dense_kwargs,
             )
         for frame in dense.sample(media_path):
+            self.refine_count += 1
             yield SampledFrame(
                 frame.timestamp,
                 frame.image,
                 frame.scene_change,
                 self._hints(windows, frame.timestamp),
+                interval=frame.interval,
             )
+
+    def prefetch_probe(self, media_path: Path) -> None:
+        path = media_path.resolve()
+        if path in self._prefetches or len(self._prefetches) >= PROBE_PREFETCH_LIMIT:
+            return
+        if not path.is_file():
+            return
+        pending = _ProbePrefetch(path)
+        pending.start(self._probe.sample)
+        self._prefetches[path] = pending
+
+    def _consume_probe(self, media_path: Path) -> Iterable[SampledFrame]:
+        path = media_path.resolve()
+        pending = self._prefetches.pop(path, None)
+        if pending is not None:
+            yield from pending.frames()
+            return
+        yield from self._probe.sample(path)
 
     def _inspect(self, image: Any) -> PresenceDecision:
         inspect = getattr(self._scanner, "inspect", None)
         if inspect is not None:
-            return inspect(image)
+            return cast(PresenceDecision, inspect(image))
         accepted = self._scanner.contains_japanese(image)
         return PresenceDecision(
             accepted,
@@ -256,6 +436,9 @@ class AdaptiveVisualSampler:
         )
 
     def close(self) -> None:
+        for pending in self._prefetches.values():
+            pending.cancel()
+        self._prefetches.clear()
         close = getattr(self._scanner, "close", None)
         if close is not None:
             close()

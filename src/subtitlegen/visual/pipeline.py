@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from subtitlegen.media import format_timecode
+from subtitlegen.runtime.executor import PrefetchInferExecutor
 from subtitlegen.visual.detection import TextDetector
 from subtitlegen.visual.furigana import mask_furigana
 from subtitlegen.visual.models import BoundingBox, SampledFrame, VisualEvent, VisualObservation
@@ -87,37 +88,80 @@ class VisualTextPipeline:
         self._minimum_japanese_characters = minimum_japanese_characters
 
     def process(self, media_path: Path) -> tuple[VisualEvent, ...]:
+        warmup = getattr(self._ocr, "warmup", None)
+        if callable(warmup):
+            warmup()
         if self._region_proposer is not None:
             self._region_proposer.reset()
         observations: list[VisualObservation] = []
         cache: dict[bytes, tuple[str, str]] = {}
         region_memory: dict[tuple[int, int, int, int], tuple[_RememberedText, ...]] = {}
         hint_memory: dict[tuple[int, int, int, int], _RememberedText] = {}
-        batch: list[SampledFrame] = []
-        sampled = 0
-        for frame in self._sampler.sample(media_path):
-            sampled += 1
-            batch.append(frame)
-            batch_size = 4 if self._region_proposer is not None else 16
-            if len(batch) == batch_size:
-                self._process_batch(
-                    batch,
-                    observations,
-                    cache,
-                    region_memory,
-                    hint_memory,
+        batch_size = 4 if self._region_proposer is not None else 16
+        infer = PrefetchInferExecutor()
+
+        def recognize_batch(frames: list[SampledFrame]) -> None:
+            self._process_batch(
+                frames,
+                observations,
+                cache,
+                region_memory,
+                hint_memory,
+            )
+
+        iter_probe = getattr(self._sampler, "iter_probe_frames", None)
+        inspect_frame = getattr(self._sampler, "inspect_frame", None)
+        windows_from_hits = getattr(self._sampler, "windows_from_hits", None)
+        iter_refine = getattr(self._sampler, "iter_refine_frames", None)
+        if (
+            callable(iter_probe)
+            and callable(inspect_frame)
+            and callable(windows_from_hits)
+            and callable(iter_refine)
+        ):
+            hits: list[tuple[float, tuple[BoundingBox, ...]]] = []
+
+            def inspect_probe(frames: list[SampledFrame]) -> None:
+                for frame in frames:
+                    decision = inspect_frame(frame)
+                    if decision.accepted:
+                        hits.append((frame.timestamp, decision.boxes))
+
+            infer.run(iter_probe(media_path), inspect_probe, batch_size=batch_size)
+            windows = windows_from_hits(hits)
+            sampled = (
+                infer.run(
+                    iter_refine(media_path, windows),
+                    recognize_batch,
+                    batch_size=batch_size,
                 )
-                batch.clear()
-        self._process_batch(batch, observations, cache, region_memory, hint_memory)
-        events = self._tracker.track(observations)
+                if windows
+                else 0
+            )
+        else:
+            sampled = infer.run(
+                self._sampler.sample(media_path),
+                recognize_batch,
+                batch_size=batch_size,
+            )
+        events = self._apply_translations(self._tracker.track(observations))
         logger.info(
-            "title-ocr-summary frames=%d observations=%d events=%d in %s",
+            "title-scan-summary probes=%s hits=%s windows=%s refine_frames=%d "
+            "observations=%d events=%d in %s",
+            getattr(self._sampler, "probe_count", "-"),
+            getattr(self._sampler, "hit_count", "-"),
+            getattr(self._sampler, "window_count", "-"),
             sampled,
             len(observations),
             len(events),
             media_path.name,
         )
         return events
+
+    def prefetch_probe(self, media_path: Path) -> None:
+        prefetch = getattr(self._sampler, "prefetch_probe", None)
+        if prefetch is not None:
+            prefetch(media_path)
 
     def _process_batch(
         self,
@@ -139,6 +183,7 @@ class VisualTextPipeline:
                 frame.scene_change,
                 frame.hint_boxes,
                 redetect=True,
+                interval=frame.interval,
             )
             if frame.hint_boxes and not frame.redetect
             else frame
@@ -186,7 +231,7 @@ class VisualTextPipeline:
                         remembered,
                     )
                     if refreshed is not None:
-                        logger.info(
+                        logger.debug(
                             "title-frame %s t=%.3f kind=%s decision=remembered count=%d text=%r",
                             format_timecode(frames[frame_index].timestamp),
                             frames[frame_index].timestamp,
@@ -274,7 +319,7 @@ class VisualTextPipeline:
                 boxes, image.shape[1], image.shape[0]
             )
             kind = "scene-change" if frame.scene_change else "interval"
-            logger.info(
+            logger.debug(
                 "title-frame %s t=%.3f kind=%s detections=%d eligible=%d dropped=%s",
                 format_timecode(frame.timestamp),
                 frame.timestamp,
@@ -302,7 +347,7 @@ class VisualTextPipeline:
                         padding_ratio=self._crop_padding_ratio,
                     )
                     if crop.size == 0:
-                        logger.info(
+                        logger.debug(
                             "title-ocr %s t=%.3f box=%s decision=empty_crop",
                             format_timecode(frame.timestamp),
                             frame.timestamp,
@@ -320,7 +365,7 @@ class VisualTextPipeline:
                         <= 8
                         and self._signature_close(signature, remembered_text.image_signature)
                     ):
-                        logger.info(
+                        logger.debug(
                             "title-ocr %s t=%.3f box=%s orientation=%s decision=keep "
                             "cache=unchanged text=%r translation=%r",
                             format_timecode(frame.timestamp),
@@ -352,7 +397,7 @@ class VisualTextPipeline:
                                 if japanese_count < self._minimum_japanese_characters
                                 else "not_title_script"
                             )
-                            logger.info(
+                            logger.debug(
                                 "title-ocr %s t=%.3f box=%s decision=%s engine=%s "
                                 "jp=%d kanji=%d kata=%d text=%r",
                                 format_timecode(frame.timestamp),
@@ -366,14 +411,15 @@ class VisualTextPipeline:
                                 source_text,
                             )
                             continue
-                        translated_text = self._translator.translate(source_text)
+                        translated_text = source_text
                         cache[fingerprint] = (source_text, translated_text)
                         cache_state = f"fresh:{engine}"
                     else:
                         source_text, translated_text = cached
                         cache_state = "cached"
-                    logger.info(
-                        "title-ocr %s t=%.3f box=%s orientation=%s decision=keep cache=%s text=%r translation=%r",
+                    logger.debug(
+                        "title-ocr %s t=%.3f box=%s orientation=%s decision=keep "
+                        "cache=%s text=%r translation=%r",
                         format_timecode(frame.timestamp),
                         frame.timestamp,
                         self._box_label(box),
@@ -473,6 +519,22 @@ class VisualTextPipeline:
         ) / len(current)
         return mean_difference <= maximum_mean_difference
 
+    def _apply_translations(
+        self,
+        events: tuple[VisualEvent, ...],
+    ) -> tuple[VisualEvent, ...]:
+        unique = list(dict.fromkeys(event.source_text for event in events))
+        if not unique:
+            return events
+        translate_many = getattr(self._translator, "translate_many", None)
+        if callable(translate_many):
+            mapped = dict(zip(unique, translate_many(unique), strict=True))
+        else:
+            mapped = {text: self._translator.translate(text) for text in unique}
+        return tuple(
+            replace(event, translated_text=mapped[event.source_text]) for event in events
+        )
+
     def close(self) -> None:
         for component in (
             self._sampler,
@@ -488,8 +550,9 @@ class VisualTextPipeline:
     @staticmethod
     def _fingerprint(image: np.ndarray[Any, Any]) -> bytes:
         digest = hashlib.blake2b(digest_size=16)
-        digest.update(str(image.shape).encode())
-        digest.update(np.ascontiguousarray(image).tobytes())
+        digest.update(str(tuple(image.shape)).encode())
+        digest.update(perceptual_hash(image).to_bytes(8, "little"))
+        digest.update(bytes(VisualTextPipeline._visual_signature(image)))
         return digest.digest()
 
     def _prepare_detector_input(

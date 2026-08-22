@@ -9,9 +9,10 @@ subtitlegen generate episode.mp4 --no-visual-text
 ```
 
 OCR does **not** run Manga OCR on every frame. A mobile Japanese recognizer first
-probes on scene changes and every `--visual-probe-seconds` (default 4). A probe
-is a hit only when a crop has **title script** (two or more kanji, or three or
-more katakana). One-character noise and hiragana filler such as `そういえば` do
+probes every `--visual-probe-seconds` (default 4). Scene-change frames still
+update a 0.25 s signature so refine can find cuts, but they do not run OCR.
+A probe is a hit only when a crop has **title script** (two or more kanji, or
+three or more katakana). One-character noise and hiragana filler such as `そういえば` do
 not open a refine window. Hits keep the **exact detector boxes**, not a padded
 half-frame.
 

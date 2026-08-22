@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -11,10 +12,11 @@ from subtitlegen.visual.models import (
     VisualEvent,
     VisualObservation,
 )
+from subtitlegen.visual.pipeline import VisualTextPipeline
+from subtitlegen.visual.presence import PresenceDecision
 from subtitlegen.visual.sampler import AdaptiveVisualSampler, FrameSampler
 from subtitlegen.visual.settings import VisualPipelineSettings
 from subtitlegen.visual.tracker import perceptual_hash
-from subtitlegen.visual.presence import PresenceDecision
 
 
 def test_visual_domain_models_validate_and_box_iou() -> None:
@@ -61,6 +63,9 @@ def test_frame_sampler_combines_regular_and_scene_change_frames(tmp_path: Path) 
 
     assert [frame.timestamp for frame in sampled] == [0.0, 0.7, 1.1]
     assert sampled[1].scene_change
+    assert sampled[0].interval
+    assert not sampled[1].interval
+    assert sampled[2].interval
     with pytest.raises(FileNotFoundError):
         tuple(sampler.sample(tmp_path / "missing.mp4"))
     with pytest.raises(ValueError):
@@ -219,3 +224,170 @@ def test_adaptive_sampler_keeps_disjoint_title_windows_apart() -> None:
         )
     )
     assert len(merged) == 1
+
+
+def test_adaptive_sampler_skips_scene_change_probe_ocr(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+    black = np.zeros((32, 32, 3), dtype=np.uint8)
+    white = np.full((32, 32, 3), 255, dtype=np.uint8)
+    inspected: list[int] = []
+
+    class RecordingScanner:
+        def inspect(self, image: object) -> PresenceDecision:
+            inspected.append(int(np.asarray(image).mean()))
+            return PresenceDecision(False, "no_japanese", 0, ())
+
+    tuple(
+        AdaptiveVisualSampler(
+            RecordingScanner(),
+            frames_per_second=1,
+            probe_interval_seconds=4,
+            refine_window_seconds=1,
+            scene_threshold=0.2,
+            frame_reader=lambda _path: [
+                (0.0, black),
+                (0.3, white),
+                (4.0, black),
+            ],
+        ).sample(media)
+    )
+
+    assert inspected == [0, 0]
+
+
+def test_adaptive_sampler_probe_logs_are_debug(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+    blank = np.zeros((8, 8, 3), dtype=np.uint8)
+
+    class MissScanner:
+        def contains_japanese(self, _image: object) -> bool:
+            return False
+
+    sampler = AdaptiveVisualSampler(
+        MissScanner(),
+        probe_interval_seconds=8,
+        refine_window_seconds=1,
+        scene_threshold=0.9,
+        frame_reader=lambda _path: [(0.0, blank), (20.0, blank)],
+    )
+    with caplog.at_level(logging.INFO, logger="subtitlegen.visual.sampler"):
+        tuple(sampler.sample(media))
+    assert "title-probe" not in caplog.text
+    with caplog.at_level(logging.DEBUG, logger="subtitlegen.visual.sampler"):
+        tuple(sampler.sample(media))
+    assert "title-probe" in caplog.text
+
+
+def test_adaptive_sampler_prefetch_reuses_probe_decode(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+    blank = np.zeros((8, 8, 3), dtype=np.uint8)
+    titled = np.full((8, 8, 3), 255, dtype=np.uint8)
+    reads = {"count": 0}
+
+    class HitScanner:
+        def contains_japanese(self, image: object) -> bool:
+            return bool(np.asarray(image).any())
+
+    def reader(_path: Path) -> list[tuple[float, object]]:
+        reads["count"] += 1
+        return [(0.0, blank), (8.0, titled), (8.5, titled), (9.0, titled), (20.0, blank)]
+
+    sampler = AdaptiveVisualSampler(
+        HitScanner(),
+        frames_per_second=2,
+        probe_interval_seconds=8,
+        refine_window_seconds=1,
+        scene_threshold=0.9,
+        frame_reader=reader,
+    )
+    sampler.prefetch_probe(media)
+    pending = sampler._prefetches[media.resolve()]
+    assert pending._thread is not None
+    pending._thread.join(timeout=2)
+    after_prefetch = reads["count"]
+    sampled = tuple(sampler.sample(media))
+    assert [frame.timestamp for frame in sampled] == [8.0, 8.5, 9.0]
+    assert after_prefetch == 1
+    assert reads["count"] == 2
+    sampler.close()
+
+
+def test_fingerprint_uses_thumbnail_not_full_pixels() -> None:
+    import inspect
+
+    image = np.zeros((64, 64, 3), dtype=np.uint8)
+    same = VisualTextPipeline._fingerprint(image)
+    assert same == VisualTextPipeline._fingerprint(image.copy())
+    source = inspect.getsource(VisualTextPipeline._fingerprint)
+    assert "perceptual_hash" in source
+    assert "tobytes" not in source
+
+
+def _write_solid_video(path: Path, *, frames: int, fps: int = 10, size: int = 16) -> None:
+    import av
+
+    container = av.open(str(path), "w")
+    stream = container.add_stream("mpeg4", rate=fps)
+    stream.width = size
+    stream.height = size
+    stream.pix_fmt = "yuv420p"
+    for index in range(frames):
+        rgb = np.full((size, size, 3), (index * 17) % 256, dtype=np.uint8)
+        frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+    container.close()
+
+
+def test_frame_sampler_seeks_refine_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import av
+
+    video = tmp_path / "clip.mp4"
+    _write_solid_video(video, frames=50, fps=10)
+    seeks: list[int] = []
+    real_open = av.open
+
+    class SeekRecorder:
+        def __init__(self, container: object) -> None:
+            self._container = container
+
+        def seek(self, *seek_args: object, **seek_kwargs: object) -> object:
+            if seek_args:
+                seeks.append(int(seek_args[0]))  # type: ignore[arg-type]
+            return self._container.seek(*seek_args, **seek_kwargs)
+
+        def __enter__(self) -> object:
+            self._container.__enter__()
+            return self
+
+        def __exit__(self, *exc: object) -> object:
+            return self._container.__exit__(*exc)
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._container, name)
+
+    def wrapped(path: str, *args: object, **kwargs: object) -> SeekRecorder:
+        return SeekRecorder(real_open(path, *args, **kwargs))
+
+    monkeypatch.setattr(av, "open", wrapped)
+    sampled = tuple(
+        FrameSampler(
+            interval_seconds=1.0,
+            scene_threshold=1.0,
+            allowed_windows=((3.0, 4.0),),
+        ).sample(video)
+    )
+    assert seeks
+    assert sampled
+    assert all(3.0 <= frame.timestamp <= 4.0 + 1e-3 for frame in sampled)

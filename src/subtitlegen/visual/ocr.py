@@ -12,6 +12,16 @@ from subtitlegen.visual.models import OcrResult
 
 logger = logging.getLogger(__name__)
 
+
+def warmup_torch() -> None:
+    """Allocate one PyTorch tensor before Paddle imports.
+
+    Paddle's allocator can break later ``torch.randn`` calls on this runtime.
+    """
+    import torch
+
+    torch.zeros(1)
+
 JAPANESE_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]")
 KANJI_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 KATAKANA_PATTERN = re.compile(r"[\u30a0-\u30ff]")
@@ -164,6 +174,10 @@ class MangaOcrEngine:
         self._model_factory = model_factory
         self._image_factory = image_factory
         self._model: Any | None = None
+
+    def warmup(self) -> None:
+        """Load PyTorch weights before Paddle runs; later torch inits can fail."""
+        self._load_model()
 
     def recognize(self, image: Any) -> OcrResult:
         model = self._load_model()

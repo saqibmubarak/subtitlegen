@@ -1,8 +1,13 @@
+import threading
 from pathlib import Path
 
 import pytest
 
-from subtitlegen.runtime.executor import GpuResourceToken, StageExecutor
+from subtitlegen.runtime.executor import (
+    GpuResourceToken,
+    PrefetchInferExecutor,
+    StageExecutor,
+)
 from subtitlegen.runtime.jobs import JobManifest, PortableJobStore
 
 
@@ -89,3 +94,29 @@ def test_executor_records_user_cancellation(
     recovered_stage = recovered.stage("asr")
     assert recovered_stage is not None
     assert recovered_stage.status == "complete"
+
+
+def test_prefetch_infer_runs_one_infer_thread() -> None:
+    seen: list[int] = []
+    names: set[str] = set()
+
+    def process(batch: list[int]) -> None:
+        names.add(threading.current_thread().name)
+        seen.extend(batch)
+
+    counted = PrefetchInferExecutor(prefetch=2).run(
+        [1, 2, 3, 4, 5],
+        process,
+        batch_size=2,
+    )
+    assert counted == 5
+    assert seen == [1, 2, 3, 4, 5]
+    assert names == {"title-infer"}
+    with pytest.raises(ValueError):
+        PrefetchInferExecutor(prefetch=0)
+    with pytest.raises(RuntimeError, match="boom"):
+        PrefetchInferExecutor().run(
+            [1, 2],
+            lambda _batch: (_ for _ in ()).throw(RuntimeError("boom")),
+            batch_size=1,
+        )

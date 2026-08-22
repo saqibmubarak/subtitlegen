@@ -12,7 +12,7 @@ from subtitlegen.export.ass import AssWriter
 from subtitlegen.media import extract_video_frame, format_timecode
 from subtitlegen.runtime.executor import StageExecutor
 from subtitlegen.runtime.jobs import PortableJobStore
-from subtitlegen.validation import parse_srt
+from subtitlegen.validation import is_valid_srt, parse_srt
 from subtitlegen.visual.merger import SubtitleMerger
 from subtitlegen.visual.models import BoundingBox, VisualEvent
 from subtitlegen.visual.pipeline import VisualTextPipeline
@@ -50,10 +50,14 @@ class MultimodalSubtitleService:
     def process(
         self,
         media_path: Path,
-        dialogue_srt: Path,
+        dialogue_srt: Path | None,
         output_path: Path,
     ) -> MultimodalResult:
-        dialogue = parse_srt(dialogue_srt)
+        dialogue = (
+            parse_srt(dialogue_srt)
+            if dialogue_srt is not None and is_valid_srt(dialogue_srt)
+            else []
+        )
         visual = self._load_or_run_visual(media_path)
         self._log_and_preview_titles(media_path, visual, output_path)
         merged = self._merger.merge(dialogue, list(visual))
@@ -71,6 +75,11 @@ class MultimodalSubtitleService:
         finally:
             temporary.unlink(missing_ok=True)
         return MultimodalResult(output_path, len(dialogue), len(visual))
+
+    def prefetch_probe(self, media_path: Path) -> None:
+        prefetch = getattr(self._visual_pipeline, "prefetch_probe", None)
+        if prefetch is not None:
+            prefetch(media_path)
 
     def close(self) -> None:
         self._visual_pipeline.close()

@@ -231,6 +231,94 @@ def test_cli_reads_preset_from_environment(monkeypatch: Any) -> None:
     assert settings.asr.language == "en"
 
 
+def test_cli_titles_only_runs_visual_without_srt(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "episode.mp4"
+    video.touch()
+
+    class FakeMultimodal:
+        def __init__(self) -> None:
+            self.dialogue: Path | None = None
+            self.closed = False
+
+        def process(
+            self,
+            _video: Path,
+            dialogue: Path | None,
+            output: Path,
+        ) -> MultimodalResult:
+            self.dialogue = dialogue
+            output.write_text("ASS", encoding="utf-8")
+            return MultimodalResult(output, 0, 1)
+
+        def close(self) -> None:
+            self.closed = True
+
+    multimodal = FakeMultimodal()
+    monkeypatch.setattr(
+        cli_module,
+        "_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("asr")),
+    )
+    monkeypatch.setattr(cli_module, "_visual_service", lambda *_args, **_kwargs: multimodal)
+
+    result = CliRunner().invoke(app, ["generate", str(video), "--titles-only"])
+
+    assert result.exit_code == 0
+    assert multimodal.dialogue is None
+    assert (tmp_path / "episode.ass").is_file()
+    assert multimodal.closed
+
+
+def test_cli_titles_prefetch_next_probe_frames(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "one.mp4"
+    second = tmp_path / "two.mp4"
+    first.touch()
+    second.touch()
+
+    class FakeMultimodal:
+        def __init__(self) -> None:
+            self.prefetch_calls: list[Path] = []
+            self.processed: list[Path] = []
+            self.closed = False
+
+        def prefetch_probe(self, media_path: Path) -> None:
+            self.prefetch_calls.append(media_path)
+
+        def process(
+            self,
+            video: Path,
+            dialogue: Path | None,
+            output: Path,
+        ) -> MultimodalResult:
+            self.processed.append(video)
+            output.write_text("ASS", encoding="utf-8")
+            return MultimodalResult(output, 0, 1)
+
+        def close(self) -> None:
+            self.closed = True
+
+    multimodal = FakeMultimodal()
+    monkeypatch.setattr(
+        cli_module,
+        "_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("asr")),
+    )
+    monkeypatch.setattr(cli_module, "_visual_service", lambda *_args, **_kwargs: multimodal)
+
+    result = CliRunner().invoke(app, ["generate", str(tmp_path), "--titles-only"])
+
+    assert result.exit_code == 0
+    assert [path.name for path in multimodal.processed] == ["one.mp4", "two.mp4"]
+    assert {path.name for path in multimodal.prefetch_calls} == {"one.mp4", "two.mp4"}
+    assert multimodal.closed
+
+
 def test_cli_reuse_srt_skips_asr_and_runs_visual(
     monkeypatch: Any,
     tmp_path: Path,
@@ -466,6 +554,7 @@ def test_visual_service_uses_fps_for_sampling_timing_and_cache(tmp_path: Path) -
     assert two_fps._visual_pipeline._sampler._refine_interval == 1.0
     assert one_fps._visual_key != two_fps._visual_key
     assert one_fps._visual_key != short_cards._visual_key
+    assert "title-scan-v8" in Path(cli_module.__file__).read_text(encoding="utf-8")
     one_fps.close()
     two_fps.close()
     short_cards.close()

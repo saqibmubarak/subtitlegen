@@ -13,20 +13,22 @@ from subtitlegen.visual.ocr import (
     has_title_script,
     japanese_character_count,
     rotate_vertical_crop,
+    warmup_torch,
 )
 from subtitlegen.visual.translation import NllbLocalTranslator
 
 
 class FakeTokenizer:
-    def __call__(self, text: str, **_kwargs: Any) -> dict[str, Any]:
+    def __call__(self, text: str | list[str], **_kwargs: Any) -> dict[str, Any]:
         return {"source": text}
 
     def convert_tokens_to_ids(self, token: str) -> int:
         assert token == "eng_Latn"
         return 42
 
-    def batch_decode(self, _tokens: Any, **_kwargs: Any) -> list[str]:
-        return ["Dofuramingo"]
+    def batch_decode(self, tokens: Any, **_kwargs: Any) -> list[str]:
+        count = len(tokens) if isinstance(tokens, list) else 1
+        return ["Dofuramingo"] * count
 
 
 class FakeTranslationModel:
@@ -36,7 +38,9 @@ class FakeTranslationModel:
     def generate(self, **kwargs: Any) -> list[list[int]]:
         self.calls += 1
         assert kwargs["forced_bos_token_id"] == 42
-        return [[1]]
+        source = kwargs.get("source")
+        count = len(source) if isinstance(source, list) else 1
+        return [[1]] * count
 
 
 def test_manga_ocr_engine_and_japanese_filter_contract() -> None:
@@ -50,6 +54,7 @@ def test_manga_ocr_engine_and_japanese_filter_contract() -> None:
         model_factory=lambda: model,
         image_factory=lambda image: image,
     )
+    engine.warmup()
     result = engine.recognize(np.zeros((5, 5, 3), dtype=np.uint8))
     assert result == OcrResult("日本")
     assert contains_japanese(result.text)
@@ -129,3 +134,24 @@ def test_nllb_translator_provides_oom_guidance() -> None:
     )
     with pytest.raises(BackendOutOfMemoryError, match="releasing ASR"):
         translator.translate("日本")
+
+
+def test_nllb_translate_many_batches_unique_uncached_strings() -> None:
+    model = FakeTranslationModel()
+    translator = NllbLocalTranslator(
+        model_factory=lambda *_args: (FakeTokenizer(), model)
+    )
+
+    assert translator.translate_many(["ドフラミンゴ", "日本", "ドフラミンゴ"]) == [
+        "Dofuramingo",
+        "Dofuramingo",
+        "Dofuramingo",
+    ]
+    assert model.calls == 1
+    assert translator.translate_many(["日本"]) == ["Dofuramingo"]
+    assert model.calls == 1
+    assert translator.translate_many([]) == []
+
+
+def test_warmup_torch_allocates_one_tensor() -> None:
+    warmup_torch()

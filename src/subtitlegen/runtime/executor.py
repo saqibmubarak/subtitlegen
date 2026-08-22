@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from threading import BoundedSemaphore
+from queue import Queue
+from threading import BoundedSemaphore, Thread
+from typing import TypeVar
 
 from subtitlegen.runtime.jobs import FileLock, JobManifest, PortableJobStore
 
 StageAction = Callable[[Path], Path]
 ArtifactValidator = Callable[[Path], bool]
+T = TypeVar("T")
+
+DECODE_PREFETCH = 12
 
 
 class GpuResourceToken:
@@ -112,3 +117,70 @@ class StageExecutor:
         except Exception as error:
             self._store.update_stage(manifest, stage_name, "failed", error=str(error))
             raise
+
+
+class PrefetchInferExecutor:
+    """Bounded decode prefetch into a single infer thread."""
+
+    def __init__(
+        self,
+        *,
+        prefetch: int = DECODE_PREFETCH,
+        thread_name: str = "title-infer",
+    ) -> None:
+        if prefetch < 1:
+            raise ValueError("decode prefetch must be at least 1")
+        self._prefetch = prefetch
+        self._thread_name = thread_name
+
+    def run(
+        self,
+        items: Iterable[T],
+        process_batch: Callable[[list[T]], None],
+        *,
+        batch_size: int,
+    ) -> int:
+        if batch_size < 1:
+            raise ValueError("infer batch size must be at least 1")
+        queue: Queue[T | None] = Queue(maxsize=self._prefetch)
+        errors: list[BaseException] = []
+        counted = 0
+
+        def infer() -> None:
+            batch: list[T] = []
+            finished = False
+            try:
+                while True:
+                    item = queue.get()
+                    if item is None:
+                        finished = True
+                        if batch:
+                            process_batch(batch)
+                        return
+                    batch.append(item)
+                    if len(batch) >= batch_size:
+                        process_batch(batch)
+                        batch.clear()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                if not finished:
+                    while True:
+                        item = queue.get()
+                        if item is None:
+                            break
+
+        thread = Thread(target=infer, name=self._thread_name, daemon=True)
+        thread.start()
+        try:
+            for item in items:
+                if errors:
+                    break
+                queue.put(item)
+                counted += 1
+        finally:
+            queue.put(None)
+            thread.join()
+        if errors:
+            raise errors[0]
+        return counted

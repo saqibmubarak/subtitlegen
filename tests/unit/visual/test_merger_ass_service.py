@@ -82,6 +82,24 @@ def test_multimodal_service_writes_atomic_ass_and_releases_models(tmp_path: Path
     assert visual.closed
 
 
+def test_multimodal_service_writes_titles_without_dialogue(tmp_path: Path) -> None:
+    media = tmp_path / "video.mp4"
+    media.touch()
+    visual = FakeVisualPipeline()
+    output = tmp_path / "video.ass"
+
+    result = MultimodalSubtitleService(visual, SubtitleMerger(), AssWriter()).process(
+        media,
+        None,
+        output,
+    )
+
+    assert result.dialogue_cues == 0
+    assert result.visual_events == 1
+    events = parse_ass_events(output.read_text(encoding="utf-8"))
+    assert [cue.style for cue in events] == ["OnScreen"]
+
+
 def test_multimodal_service_resumes_valid_visual_artifact(tmp_path: Path) -> None:
     media = tmp_path / "video.mp4"
     media.touch()
