@@ -7,6 +7,8 @@ ARG PIP_EXTRAS=""
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore \
     HF_HOME=/models/huggingface \
     SUBTITLEGEN_CACHE_DIR=/cache \
     PADDLE_PDX_CACHE_HOME=/models/paddle \
@@ -19,12 +21,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ${APT_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
 
-# Third-party wheels depend only on pyproject extras. Source edits reuse this layer.
-COPY pyproject.toml ReadMe.md scripts/docker_install_deps.py ./
+# Only the extras lock files go in before pip, so src/ and docs edits skip this layer.
+COPY pyproject.toml scripts/docker_install_deps.py ./
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install setuptools wheel \
-    && python docker_install_deps.py ${PIP_EXTRAS}
+    python docker_install_deps.py ${PIP_EXTRAS}
 
+COPY ReadMe.md ./
 COPY src ./src
 COPY profiles ./profiles
 RUN --mount=type=cache,target=/root/.cache/pip \

@@ -17,11 +17,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ${APT_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ReadMe.md scripts/docker_install_deps.py ./
+COPY pyproject.toml scripts/docker_install_deps.py ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install setuptools wheel \
     && python docker_install_deps.py ${FEATURE_EXTRAS} dev
 
+COPY ReadMe.md ./
 COPY src ./src
 COPY profiles ./profiles
 COPY tests ./tests

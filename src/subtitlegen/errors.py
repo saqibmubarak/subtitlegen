@@ -8,3 +8,11 @@ class BackendUnavailableError(RuntimeError):
 
 class BackendOutOfMemoryError(RuntimeError):
     """Raised with actionable guidance after a model allocation failure."""
+
+
+class SubtitleWriteError(RuntimeError):
+    """Raised when a background subtitle write fails."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(path)
+        self.path = path

@@ -4,6 +4,7 @@ import wave
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from typer.testing import CliRunner
 
@@ -69,6 +70,27 @@ def test_media_duration_uses_pyav_without_ffmpeg_binary(tmp_path: Path) -> None:
     assert format_timecode(1242.0) == "00:20:42.00"
     with pytest.raises(ValueError):
         extract_video_frame(audio, -1, tmp_path / "frame.jpg")
+
+
+def test_load_audio_prefers_ffmpeg_when_available(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    import subprocess
+
+    media = tmp_path / "clip.mp4"
+    media.touch()
+    samples = np.zeros(1_600, dtype=np.float32).tobytes()
+
+    def fake_run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        assert command[0] == "/usr/bin/ffmpeg"
+        assert str(media) in command
+        return subprocess.CompletedProcess(command, 0, stdout=samples, stderr=b"")
+
+    monkeypatch.setattr("subtitlegen.media.shutil.which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("subtitlegen.media.subprocess.run", fake_run)
+    decoded = load_audio_mono(media)
+    assert decoded.size == 1_600
+    assert decoded.dtype == np.float32
 
 
 def test_json_formatter_emits_structured_message() -> None:

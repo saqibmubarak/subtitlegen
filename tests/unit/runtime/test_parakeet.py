@@ -54,16 +54,17 @@ def test_parakeet_normalizes_timestamps_reuses_and_releases_model(tmp_path: Path
     assert [word.text for word in result.words] == ["Hello", " world"]
     assert result.language == "en"
     assert result.duration == 1.0
-    assert names == [ParakeetBackend.DEFAULT_MODEL, ParakeetBackend.DEFAULT_MODEL]
+    assert names == [ParakeetBackend.DEFAULT_MODEL]
     assert created[0].calls[0]["batch_size"] == 1
     assert created[0].calls[0]["timestamps"] is True
     assert created[0].calls[0]["verbose"] is False
     assert np.array_equal(created[0].calls[0]["audio"][0], SILENCE)
     assert not backend.capabilities.context_prompt
-    assert len(created) == 2
+    assert len(created) == 1
 
+    backend.close()
     backend.transcribe(media)
-    assert len(created) == 3
+    assert len(created) == 2
 
 
 def test_parakeet_ignores_decoder_context_and_rejects_non_english(tmp_path: Path) -> None:
@@ -135,6 +136,25 @@ def test_parakeet_windows_long_audio_and_offsets_timestamps(tmp_path: Path) -> N
     assert {word.start for word in result.words} >= {0.0, 20.0, 40.0}
 
 
+def test_parakeet_sends_all_windows_in_one_transcribe(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    audio = np.zeros(200 * 16_000, dtype=np.float32)
+    model = FakeModel()
+    result = ParakeetBackend(
+        AsrSettings(),
+        model_factory=lambda _name: model,
+        audio_loader=lambda _path: audio,
+        window_seconds=20.0,
+        overlap_seconds=0.0,
+    ).transcribe(media)
+
+    assert len(model.calls) == 1
+    assert len(model.calls[0]["audio"]) == 10
+    assert model.calls[0]["batch_size"] == 8
+    assert result.duration == 200.0
+
+
 def test_parakeet_splits_window_after_oom(tmp_path: Path) -> None:
     media = tmp_path / "clip.wav"
     media.touch()
@@ -160,7 +180,7 @@ def test_parakeet_splits_window_after_oom(tmp_path: Path) -> None:
         batch_size=1,
     ).transcribe(media)
 
-    assert model.calls >= 3
+    assert model.calls >= 2
     assert result.words
     assert result.duration == 20.0
 
@@ -186,6 +206,26 @@ def test_parakeet_reloads_model_after_cuda_illegal_access(tmp_path: Path) -> Non
 
     assert loads["count"] == 2
     assert result.words
+
+
+def test_parakeet_uses_prefetched_audio_once(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    loads: list[Path] = []
+
+    def loader(path: Path) -> Any:
+        loads.append(path)
+        return SILENCE
+
+    backend = ParakeetBackend(
+        AsrSettings(),
+        model_factory=lambda _name: FakeModel(),
+        audio_loader=loader,
+    )
+    backend.prefetch_audio(media)
+    backend.transcribe(media)
+
+    assert loads == [media.resolve()]
 
 
 def test_parakeet_splits_batch_after_oom(tmp_path: Path) -> None:

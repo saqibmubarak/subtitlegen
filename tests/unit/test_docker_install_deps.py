@@ -17,3 +17,16 @@ def test_requirements_include_core_and_named_extras() -> None:
     assert "faster-whisper==1.2.1" in reqs
     assert "nemo_toolkit[asr]==3.0.0" in reqs
     assert "paddleocr==3.7.0" not in reqs
+
+
+def test_dockerfile_extras_layer_ignores_readme_and_src() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    extras, marker, rest = dockerfile.partition("python docker_install_deps.py")
+    assert marker
+    assert "COPY pyproject.toml" in extras
+    assert "docker_install_deps.py" in extras
+    assert "type=bind" not in extras
+    assert "ReadMe.md" not in extras
+    assert "COPY src" not in extras
+    assert "ReadMe.md" in rest
+    assert "COPY src" in rest

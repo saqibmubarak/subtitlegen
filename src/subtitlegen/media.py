@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -58,7 +60,52 @@ def media_duration(path: Path) -> float:
 
 
 def load_audio_mono(path: Path, sample_rate: int = 16_000) -> npt.NDArray[np.float32]:
-    """Decode audio with PyAV so native runs do not require an ffmpeg executable."""
+    """Decode audio to mono float32. Prefer ffmpeg; fall back to PyAV."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is not None:
+        try:
+            return _load_audio_ffmpeg(path, sample_rate, ffmpeg)
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+    return _load_audio_pyav(path, sample_rate)
+
+
+def _load_audio_ffmpeg(
+    path: Path,
+    sample_rate: int,
+    ffmpeg: str,
+) -> npt.NDArray[np.float32]:
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-i",
+            str(path),
+            "-map",
+            "a:0",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "pipe:1",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    if not completed.stdout:
+        raise ValueError(f"media contains no decodable audio: {path}")
+    return np.frombuffer(completed.stdout, dtype=np.float32).copy()
+
+
+def _load_audio_pyav(path: Path, sample_rate: int) -> npt.NDArray[np.float32]:
     import av
 
     chunks: list[npt.NDArray[np.float32]] = []

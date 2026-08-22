@@ -12,6 +12,7 @@ from typing import Annotated
 import typer
 
 from subtitlegen.cues.builder import CueBuilder
+from subtitlegen.errors import SubtitleWriteError
 from subtitlegen.export.ass import AssWriter
 from subtitlegen.export.srt import SrtWriter
 from subtitlegen.logging import configure_logging
@@ -434,14 +435,33 @@ def generate(
     failures = 0
     generated: list[tuple[Path, Path]] = []
     input_root = input_path.resolve()
+
+    def output_for(video: Path) -> Path:
+        if output_dir is None:
+            return video.with_suffix(".srt")
+        if input_root.is_dir():
+            return output_dir / video.relative_to(input_root).with_suffix(".srt")
+        return output_dir / f"{video.stem}.srt"
+
+    jobs = [(video, output_for(video)) for video in videos]
+
+    def needed_from(start: int) -> list[Path]:
+        return [
+            video
+            for video, output in jobs[start:]
+            if overwrite or not is_valid_srt(output)
+        ]
+
+    prefetch = getattr(service, "prefetch_audio", None)
+    if prefetch is not None:
+        for video in needed_from(0)[:2]:
+            prefetch(video)
+    enrich_outputs: list[Path] = []
     try:
-        for video in videos:
-            if output_dir is None:
-                output = video.with_suffix(".srt")
-            elif input_root.is_dir():
-                output = output_dir / video.relative_to(input_root).with_suffix(".srt")
-            else:
-                output = output_dir / f"{video.stem}.srt"
+        for index, (video, output) in enumerate(jobs):
+            if prefetch is not None:
+                for video_ahead in needed_from(index + 1)[:2]:
+                    prefetch(video_ahead)
             try:
                 result = service.process(
                     video,
@@ -450,24 +470,32 @@ def generate(
                     overwrite=overwrite,
                 )
                 generated.append((video, output))
-                if series_profile is not None and auto_profile and result.status != "skipped":
-                    series_profile = _enrich_profile(
-                        series_profile,
-                        output,
-                        ProfileRepository(cache_dir / "profiles"),
-                        service,
-                        local_correction=local_correction,
-                    )
                 if result.status == "skipped":
                     logger.info(
                         "skipped: %s already exists; pass --overwrite to regenerate",
                         output,
                     )
                 else:
+                    enrich_outputs.append(output)
                     logger.info("%s: %s using %s", result.status, output, selected)
+            except SubtitleWriteError as error:
+                failures += 1
+                logger.exception("failed: %s", error.path)
             except Exception:
                 failures += 1
                 logger.exception("failed: %s", video)
+        flush = getattr(service, "flush_writes", None)
+        if flush is not None:
+            flush()
+        if series_profile is not None and auto_profile:
+            for output in enrich_outputs:
+                series_profile = _enrich_profile(
+                    series_profile,
+                    output,
+                    ProfileRepository(cache_dir / "profiles"),
+                    service,
+                    local_correction=local_correction,
+                )
     finally:
         close = getattr(service, "close", None)
         if close is not None:

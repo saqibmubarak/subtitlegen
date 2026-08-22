@@ -42,6 +42,7 @@ class StageExecutor:
         *,
         validator: ArtifactValidator | None = None,
         force: bool = False,
+        use_resource: bool = True,
     ) -> tuple[JobManifest, Path]:
         lock_name = hashlib.sha256(stage_name.encode()).hexdigest()[:16]
         lock_path = self._store.job_directory(manifest) / f".stage-{lock_name}.lock"
@@ -53,6 +54,7 @@ class StageExecutor:
                 action,
                 validator=validator,
                 force=force,
+                use_resource=use_resource,
             )
 
     def _run_locked(
@@ -63,6 +65,7 @@ class StageExecutor:
         *,
         validator: ArtifactValidator | None,
         force: bool,
+        use_resource: bool = True,
     ) -> tuple[JobManifest, Path]:
         current = manifest.stage(stage_name)
         if (
@@ -77,7 +80,7 @@ class StageExecutor:
 
         manifest = self._store.update_stage(manifest, stage_name, "running")
         try:
-            if self._resource is None:
+            if self._resource is None or not use_resource:
                 artifact = action(self._store.job_directory(manifest))
             else:
                 with self._resource.acquire():

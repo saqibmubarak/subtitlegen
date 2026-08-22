@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import logging
 from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ WINDOW_SECONDS = 20.0
 OVERLAP_SECONDS = 1.0
 MIN_WINDOW_SECONDS = 5.0
 BATCH_SIZE = 8
+PREFETCH_LIMIT = 2
 
 
 class ParakeetBackend:
@@ -51,6 +53,9 @@ class ParakeetBackend:
         self._overlap_seconds = overlap_seconds
         self._batch_size = batch_size
         self._model: Any | None = None
+        self._prefetch_pool: ThreadPoolExecutor | None = None
+        self._prefetches: dict[Path, Future[Any]] = {}
+        self._logged_context = False
 
     @property
     def capabilities(self) -> BackendCapabilities:
@@ -68,14 +73,15 @@ class ParakeetBackend:
         requested_language = language or self._settings.language or "en"
         if requested_language.split("-")[0].casefold() != "en":
             raise ValueError("Parakeet TDT 0.6B v3 supports English audio only")
-        if context is not None:
+        if context is not None and not self._logged_context:
             logger.info(
                 "Parakeet cannot consume ASR prompts or hotwords; "
                 "glossary correction still runs after transcription"
             )
+            self._logged_context = True
         # NeMo's Lhotse loader keeps stereo as (batch, channels, time). Parakeet
         # expects (batch, time); channel_selector="average" is broken in NeMo 3.
-        audio = self._audio_loader(media_path)
+        audio = self._consume_audio(media_path)
         duration = len(audio) / SAMPLE_RATE
         try:
             words = self._transcribe_windows(
@@ -83,10 +89,12 @@ class ParakeetBackend:
                 offset=0.0,
                 window_seconds=self._window_seconds,
             )
-        finally:
-            # A CUDA fault poisons the process; later files fail instantly
-            # unless the model and cache are dropped between episodes.
+        except Exception:
+            # A CUDA fault poisons the process; drop the model so the next
+            # file can reload instead of failing on the first tensor move.
             self.close()
+            raise
+        del audio
         words.sort(key=lambda word: (word.start, word.end))
         logger.info(
             "asr-parakeet duration=%.1fs words=%d",
@@ -95,9 +103,30 @@ class ParakeetBackend:
         )
         return Transcription(words=tuple(words), language="en", duration=duration)
 
+    def prefetch_audio(self, media_path: Path) -> None:
+        path = media_path.resolve()
+        if path in self._prefetches or len(self._prefetches) >= PREFETCH_LIMIT:
+            return
+        if self._prefetch_pool is None:
+            self._prefetch_pool = ThreadPoolExecutor(
+                max_workers=PREFETCH_LIMIT,
+                thread_name_prefix="parakeet-audio",
+            )
+        self._prefetches[path] = self._prefetch_pool.submit(self._audio_loader, path)
+
     def close(self) -> None:
+        for future in self._prefetches.values():
+            future.cancel()
+        self._prefetches.clear()
         self._model = None
         _release_cuda()
+
+    def _consume_audio(self, media_path: Path) -> Any:
+        path = media_path.resolve()
+        pending = self._prefetches.pop(path, None)
+        if pending is not None:
+            return pending.result()
+        return self._audio_loader(path)
 
     def _transcribe_windows(
         self,
@@ -109,61 +138,55 @@ class ParakeetBackend:
         windows = list(
             _audio_windows(audio, SAMPLE_RATE, window_seconds, self._overlap_seconds)
         )
+        if not windows:
+            return []
+        try:
+            hypotheses = self._decode_batch(
+                [chunk for _offset, chunk, _last in windows],
+                allow_cuda_retry=True,
+            )
+        except Exception as error:
+            if not _is_oom(error):
+                raise
+            self.close()
+            local_offset, chunk, _is_last = windows[0]
+            smaller = window_seconds / 2
+            if smaller < MIN_WINDOW_SECONDS:
+                raise BackendOutOfMemoryError(
+                    "Parakeet exhausted VRAM; close other GPU apps"
+                ) from error
+            logger.warning(
+                "Parakeet OOM on %.1fs window; retrying at %.1fs",
+                window_seconds,
+                smaller,
+            )
+            return self._transcribe_windows(
+                chunk,
+                offset=offset + local_offset,
+                window_seconds=smaller,
+            )
         words: list[Word] = []
-        index = 0
-        while index < len(windows):
-            batch = windows[index : index + self._batch_size]
-            try:
-                hypotheses = self._decode_batch(
-                    [chunk for _offset, chunk, _last in batch],
-                    allow_cuda_retry=True,
+        for index, ((local_offset, chunk, is_last), hypothesis) in enumerate(
+            zip(windows, hypotheses, strict=True)
+        ):
+            chunk_seconds = len(chunk) / SAMPLE_RATE
+            words.extend(
+                _keep_window_words(
+                    _words_from_hypothesis(hypothesis, offset + local_offset),
+                    offset + local_offset,
+                    chunk_seconds,
+                    self._overlap_seconds,
+                    first=index == 0,
+                    last=is_last,
                 )
-            except Exception as error:
-                if not _is_oom(error):
-                    raise
-                self.close()
-                local_offset, chunk, _is_last = batch[0]
-                smaller = window_seconds / 2
-                if smaller < MIN_WINDOW_SECONDS:
-                    raise BackendOutOfMemoryError(
-                        "Parakeet exhausted VRAM; close other GPU apps"
-                    ) from error
-                logger.warning(
-                    "Parakeet OOM on %.1fs window; retrying at %.1fs",
-                    window_seconds,
-                    smaller,
-                )
-                words.extend(
-                    self._transcribe_windows(
-                        chunk,
-                        offset=offset + local_offset,
-                        window_seconds=smaller,
-                    )
-                )
-                index += 1
-                continue
-            for local_index, ((local_offset, chunk, is_last), hypothesis) in enumerate(
-                zip(batch, hypotheses, strict=True)
-            ):
-                chunk_seconds = len(chunk) / SAMPLE_RATE
-                words.extend(
-                    _keep_window_words(
-                        _words_from_hypothesis(hypothesis, offset + local_offset),
-                        offset + local_offset,
-                        chunk_seconds,
-                        self._overlap_seconds,
-                        first=index + local_index == 0,
-                        last=is_last,
-                    )
-                )
-            index += len(batch)
+            )
         return words
 
     def _decode_batch(self, chunks: list[Any], *, allow_cuda_retry: bool) -> list[Any]:
         try:
             return self._load_model().transcribe(
                 chunks,
-                batch_size=len(chunks),
+                batch_size=min(self._batch_size, len(chunks)),
                 timestamps=True,
                 verbose=False,
             )

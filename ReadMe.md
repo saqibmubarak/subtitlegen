@@ -161,12 +161,14 @@ docker compose --profile windows down
 
 `windows build` / `windows up` is the default Windows command. After a Python
 change you must **rebuild** — `run` does not copy new code into an old image.
-Dependency wheels are cached; only `pyproject.toml` extras trigger a full
-re-download. Hugging Face weights in `MODEL_CACHE_HOST_PATH` stay on disk.
+`src/` and `ReadMe.md` rebuilds reinstall only the local package. Third-party
+wheels reinstall only when `pyproject.toml` extras change. Hugging Face
+weights in `MODEL_CACHE_HOST_PATH` stay on disk.
 
-Parakeet (`english-fast`, backend `auto`) downmixes stereo to 16 kHz mono and
-transcribes **batched 20 s windows**. A full-episode tensor OOMs; if a batch
-does, it splits and retries.
+Parakeet (`english-fast`, backend `auto`) runs a three-stage pipeline: decode
+the next files with ffmpeg, keep the model on GPU, and write the previous SRT
+on a background thread. Windows are sent in **one batched 20 s transcribe**.
+A full-episode tensor OOMs; if a batch does, it splits and retries.
 
 Do **not** set `SUBTITLEGEN_OVERWRITE=1` on the title image. Overwrite would
 wipe the Parakeet SRT and re-transcribe with faster-whisper.

@@ -68,6 +68,22 @@ def test_service_releases_backend(tmp_path: Path) -> None:
     assert backend.closed
 
 
+def test_service_prefetches_audio_when_backend_supports_it(tmp_path: Path) -> None:
+    class PrefetchBackend(FakeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.prefetched: list[Path] = []
+
+        def prefetch_audio(self, media_path: Path) -> None:
+            self.prefetched.append(media_path)
+
+    backend = PrefetchBackend()
+    media = tmp_path / "clip.mp4"
+    media.touch()
+    _service(tmp_path, backend).prefetch_audio(media)
+    assert backend.prefetched == [media]
+
+
 def test_service_can_replace_cue_processor(tmp_path: Path) -> None:
     class Marker:
         def process(self, cues: Any) -> Any:
@@ -87,11 +103,13 @@ def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:
     service = _service(tmp_path, backend)
 
     generated = service.process(media, output, language="en")
+    service.flush_writes()
     assert generated.status == "generated"
     assert output.exists()
 
     output.unlink()
     resumed = service.process(media, output, language="en")
+    service.flush_writes()
     assert resumed.status == "resumed"
     assert backend.calls == 1
 
@@ -102,6 +120,7 @@ def test_service_generates_resumes_and_skips(tmp_path: Path) -> None:
     assert changed_rules.process(media, output).status == "skipped"
     assert backend.calls == 1
     overwritten = changed_rules.process(media, output, overwrite=True)
+    changed_rules.flush_writes()
     assert overwritten.status == "resumed"
     assert backend.calls == 1
 
@@ -122,7 +141,9 @@ def test_service_injects_asr_context(tmp_path: Path) -> None:
     media.write_bytes(b"media")
     backend = FakeBackend()
     context = AsrContext(prompt="Aang", hotwords=("Aang",))
-    _service(tmp_path, backend, context=context).process(media, tmp_path / "output.srt")
+    service = _service(tmp_path, backend, context=context)
+    service.process(media, tmp_path / "output.srt")
+    service.flush_writes()
     assert backend.contexts == [context]
 
 
@@ -148,23 +169,28 @@ def test_service_repairs_corrupt_cached_artifacts_and_overwrites(tmp_path: Path)
     backend = FakeBackend()
     service = _service(tmp_path, backend)
     service.process(media, output)
+    service.flush_writes()
 
     words = next((tmp_path / "jobs").glob("**/words.json"))
     words.write_text("{", encoding="utf-8")
     output.unlink()
     service.process(media, output)
+    service.flush_writes()
     assert backend.calls == 2
 
     cached_srt = next((tmp_path / "jobs").glob("**/subtitle.srt"))
     cached_srt.write_text("broken", encoding="utf-8")
     output.unlink()
     service.process(media, output)
+    service.flush_writes()
     assert "Hello world." in output.read_text(encoding="utf-8")
     assert backend.calls == 2
 
     service.process(media, output, overwrite=True)
+    service.flush_writes()
     assert backend.calls == 2
 
     refreshed = service.process(media, output, overwrite=True, refresh_stages=True)
+    service.flush_writes()
     assert refreshed.status == "generated"
     assert backend.calls == 3

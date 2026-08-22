@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -12,6 +13,7 @@ from typing import Literal, Protocol
 from subtitlegen.asr.base import AsrBackend
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.domain.models import Cue, Transcription, Word
+from subtitlegen.errors import SubtitleWriteError
 from subtitlegen.pipeline import CueAssembler, SubtitleWriter
 from subtitlegen.runtime.executor import StageExecutor
 from subtitlegen.runtime.jobs import PortableJobStore
@@ -55,6 +57,8 @@ class RuntimeService:
         self._output_key = output_key
         self._context = context
         self._cue_processor = cue_processor
+        self._write_pool: ThreadPoolExecutor | None = None
+        self._pending_writes: list[tuple[Path, Future[None]]] = []
 
     def process(
         self,
@@ -104,15 +108,24 @@ class RuntimeService:
                 temporary.unlink(missing_ok=True)
             return artifact
 
-        _, subtitle_path = self._executor.run(
-            manifest,
-            f"subtitle-{self._output_key}",
-            build_subtitle,
-            validator=is_valid_srt,
-            force=refresh_stages,
-        )
-        self._atomic_copy(subtitle_path, output_path)
-        self._write_output_metadata(output_path, manifest.source_sha256)
+        def write_output() -> None:
+            _, subtitle_path = self._executor.run(
+                manifest,
+                f"subtitle-{self._output_key}",
+                build_subtitle,
+                validator=is_valid_srt,
+                force=refresh_stages,
+                use_resource=False,
+            )
+            self._atomic_copy(subtitle_path, output_path)
+            self._write_output_metadata(output_path, manifest.source_sha256)
+
+        if self._write_pool is None:
+            self._write_pool = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="subtitle-write",
+            )
+        self._pending_writes.append((output_path, self._write_pool.submit(write_output)))
         status: Literal["generated", "resumed"] = (
             "resumed"
             if not refresh_stages
@@ -125,8 +138,30 @@ class RuntimeService:
     def set_cue_processor(self, cue_processor: CueProcessor | None) -> None:
         self._cue_processor = cue_processor
 
+    def prefetch_audio(self, media_path: Path) -> None:
+        prefetch = getattr(self._backend, "prefetch_audio", None)
+        if prefetch is not None:
+            prefetch(media_path)
+
+    def flush_writes(self) -> None:
+        pending = self._pending_writes
+        self._pending_writes = []
+        for output_path, future in pending:
+            try:
+                future.result()
+            except SubtitleWriteError:
+                raise
+            except Exception as error:
+                raise SubtitleWriteError(str(output_path)) from error
+
     def close(self) -> None:
-        self._backend.close()
+        try:
+            self.flush_writes()
+        finally:
+            if self._write_pool is not None:
+                self._write_pool.shutdown(wait=True)
+                self._write_pool = None
+            self._backend.close()
 
     def _is_current_output(self, output_path: Path, source_sha256: str) -> bool:
         try:
