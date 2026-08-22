@@ -133,35 +133,64 @@ Use **forward slashes** (`C:/Users/you/Videos/Dressrosa`). A backslash before
 Videos are always **`/data/videos` inside the container**. Do not pass
 `D:\...` as the `generate` path.
 
-### 2. Windows default: Parakeet dialogue + OCR titles
+### 2. Windows default: one Compose pipeline
 
-NeMo/Parakeet and Paddle OCR are **two images**. Do not put both in one
-container (VRAM and install size). Run them in order on the same
-`VIDEO_HOST_PATH`. The second step **skips** ASR when a valid `.srt` already
-exists, then writes the `.ass`.
+Parakeet and Paddle stay in **two images** (one GPU owner each; a combined
+image would be huge and would fight for VRAM). Compose runs them **in order**
+on the same `VIDEO_HOST_PATH`: dialogue writes `.srt`, titles reuse it and
+write `.ass`.
+
+Every service is behind a **profile**. A plain `docker compose up` starts
+nothing.
+
+`up` here is **foreground** (stay in the terminal). That is how Compose runs
+two services in order (`windows-dialogue`, then `windows-titles`). Do **not**
+add `-d` / `--detach` — that background form is for servers that keep running.
+`down` is only cleanup: `up` has no `--rm`, so it leaves stopped containers.
 
 ```powershell
-# First time only: build both images
-docker compose --profile nemo build parakeet
-docker compose --profile ocr build visual
+# First time, after src/ changes, or after changing pyproject extras
+docker compose --profile windows build
 
-# 1) English dialogue with Parakeet (no OCR in this image)
-docker compose --profile nemo run --rm parakeet
+# Foreground: Parakeet SRT, then OCR ASS (not `up -d`)
+docker compose --profile windows up
 
-# 2) Japanese on-screen titles; reuses the Parakeet SRT
-docker compose --profile ocr run --rm visual
+# Optional: delete the stopped job containers
+docker compose --profile windows down
 ```
 
-Do **not** set `SUBTITLEGEN_OVERWRITE=1` on step 2. Overwrite would wipe the
-Parakeet SRT and re-transcribe with faster-whisper.
+`windows build` / `windows up` is the default Windows command. After a Python
+change you must **rebuild** — `run` does not copy new code into an old image.
+Dependency wheels are cached; only `pyproject.toml` extras trigger a full
+re-download. Hugging Face weights in `MODEL_CACHE_HOST_PATH` stay on disk.
 
-To redo **titles only** after a Parakeet SRT exists, just run step 2 again
-(visual cache key changes also rebuild ASS). To redo **dialogue**, run step 1
-with overwrite, then step 2:
+Parakeet (`english-fast`, backend `auto`) downmixes stereo to 16 kHz mono and
+transcribes in **20 s windows** so an 8 GB GPU does not OOM on a full episode.
+
+Do **not** set `SUBTITLEGEN_OVERWRITE=1` on the title image. Overwrite would
+wipe the Parakeet SRT and re-transcribe with faster-whisper.
+
+| Profile | Command | What it does |
+|---|---|---|
+| `windows` | `docker compose --profile windows up` | **Recommended.** Parakeet, then OCR |
+| `nemo` | `docker compose --profile nemo run --rm parakeet` | Dialogue only. `--rm` deletes the container when it exits |
+| `ocr` | `docker compose --profile ocr run --rm visual` | Titles only (reuses SRT), or Whisper + titles |
+| `subtitler` | `docker compose --profile subtitler run --rm subtitler generate /data/videos --no-visual-text` | Dialogue only, no NeMo/OCR |
+| `whisperx` | `docker compose --profile whisperx run --rm whisperx` | WhisperX alignment |
+
+Rebuild one image:
 
 ```powershell
-docker compose --profile nemo run --rm -e SUBTITLEGEN_OVERWRITE=1 parakeet
+docker compose --profile windows build
+docker compose --profile nemo build parakeet
+docker compose --profile ocr build visual
+```
+
+Redo **titles only**, or **dialogue only**:
+
+```powershell
 docker compose --profile ocr run --rm visual
+docker compose --profile nemo run --rm -e SUBTITLEGEN_OVERWRITE=1 parakeet
 ```
 
 Outputs land next to the videos: `episode.srt` (Parakeet) and `episode.ass`
@@ -182,13 +211,6 @@ docker compose --profile ocr run --rm visual
 ```
 
 That uses faster-whisper large-v3 in the OCR image, then Paddle/NLLB.
-
-| Command | When to use |
-|---|---|
-| `parakeet` then `visual` (section 2) | **Windows recommended.** Parakeet SRT + OCR ASS |
-| `docker compose --profile ocr run --rm visual` | One-shot Whisper + titles |
-| `docker compose run --rm subtitler generate /data/videos --no-visual-text` | Dialogue only, no NeMo/OCR |
-| `docker compose --profile whisperx run --rm whisperx` | WhisperX alignment; add `visual` after if you want titles |
 
 Compose already passes `generate /data/videos`. Extra flags:
 
@@ -263,9 +285,14 @@ subtitlegen generate ./videos --profile one-piece --arc Dressrosa --preset quali
 ```
 
 ```powershell
-# Windows: Parakeet SRT, then OCR ASS (do not overwrite on the second command)
+# Windows: Parakeet SRT, then OCR ASS (rebuild after src/ changes)
+docker compose --profile windows build
+docker compose --profile windows up
+docker compose --profile windows down
+
+# Windows: dialogue only
+docker compose --profile nemo build parakeet
 docker compose --profile nemo run --rm parakeet
-docker compose --profile ocr run --rm visual
 
 # Windows: Whisper quality + titles in one container
 docker compose --profile ocr run --rm visual

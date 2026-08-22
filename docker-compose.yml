@@ -1,3 +1,9 @@
+# Job-oriented Compose file. Every service is behind a profile so a plain
+# `docker compose up` starts nothing. Use:
+#   windows  — Parakeet dialogue, then OCR titles (sequential, two images)
+#   nemo     — Parakeet only
+#   ocr      — Whisper + titles in the visual image
+#   whisperx / subtitler — single-image jobs
 x-subtitlegen-environment: &subtitlegen-environment
   HF_HOME: /models/huggingface
   PYTHONUNBUFFERED: "1"
@@ -23,57 +29,93 @@ x-gpu: &gpu
           count: 1
           capabilities: [gpu]
 
+x-parakeet: &parakeet
+  image: subtitlegen-parakeet
+  build:
+    context: .
+    args:
+      PIP_EXTRAS: nemo
+  environment:
+    <<: *subtitlegen-environment
+    # english-fast selects Parakeet. Do not also set BACKEND; the CLI forbids both.
+    SUBTITLEGEN_PRESET: english-fast
+    SUBTITLEGEN_BACKEND: auto
+  volumes: *subtitlegen-volumes
+  deploy:
+    <<: *gpu
+  init: true
+  restart: "no"
+  command: ["generate", "/data/videos", "--no-visual-text"]
+
+x-visual: &visual
+  image: subtitlegen-visual
+  build:
+    context: .
+    args:
+      APT_PACKAGES: ffmpeg libgl1
+      PIP_EXTRAS: cuda,ocr
+  environment:
+    <<: *subtitlegen-environment
+    PADDLE_PDX_CACHE_HOME: /models/paddle
+    FLAGS_use_mkldnn: "0"
+    FLAGS_enable_mkldnn: "0"
+    FLAGS_enable_pir_api: "0"
+    FLAGS_enable_pir_in_executor: "0"
+  volumes: *subtitlegen-volumes
+  deploy:
+    <<: *gpu
+  init: true
+  restart: "no"
+  command: ["generate", "/data/videos"]
+
 services:
   subtitler:
-    build: .
+    image: subtitlegen
+    profiles: ["subtitler"]
+    build:
+      context: .
     environment:
       <<: *subtitlegen-environment
     volumes: *subtitlegen-volumes
     deploy:
       <<: *gpu
+    init: true
+    restart: "no"
     command: ["generate", "/data/videos"]
 
   whisperx:
+    image: subtitlegen-whisperx
     profiles: ["whisperx"]
     build:
       context: .
-      dockerfile: Dockerfile.whisperx
+      args:
+        PIP_EXTRAS: cuda
     environment:
       <<: *subtitlegen-environment
       SUBTITLEGEN_PRESET: ${SUBTITLEGEN_PRESET:-quality}
     volumes: *subtitlegen-volumes
     deploy:
       <<: *gpu
+    init: true
+    restart: "no"
     command: ["generate", "/data/videos"]
 
   parakeet:
+    <<: *parakeet
     profiles: ["nemo"]
-    build:
-      context: .
-      dockerfile: Dockerfile.nemo
-    environment:
-      <<: *subtitlegen-environment
-      # english-fast selects Parakeet. Do not also set BACKEND; the CLI forbids both.
-      SUBTITLEGEN_PRESET: english-fast
-      SUBTITLEGEN_BACKEND: auto
-    volumes: *subtitlegen-volumes
-    deploy:
-      <<: *gpu
-    command: ["generate", "/data/videos", "--no-visual-text"]
 
   visual:
+    <<: *visual
     profiles: ["ocr"]
-    build:
-      context: .
-      dockerfile: Dockerfile.ocr
-    environment:
-      <<: *subtitlegen-environment
-      PADDLE_PDX_CACHE_HOME: /models/paddle
-      FLAGS_use_mkldnn: "0"
-      FLAGS_enable_mkldnn: "0"
-      FLAGS_enable_pir_api: "0"
-      FLAGS_enable_pir_in_executor: "0"
-    volumes: *subtitlegen-volumes
-    deploy:
-      <<: *gpu
-    command: ["generate", "/data/videos"]
+
+  # Sequential Windows job: Parakeet SRT, then OCR ASS. Same images, not one container.
+  windows-dialogue:
+    <<: *parakeet
+    profiles: ["windows"]
+
+  windows-titles:
+    <<: *visual
+    profiles: ["windows"]
+    depends_on:
+      windows-dialogue:
+        condition: service_completed_successfully

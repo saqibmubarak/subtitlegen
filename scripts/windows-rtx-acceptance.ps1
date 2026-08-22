@@ -21,9 +21,9 @@ try {
         python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
 
     docker build -t subtitlegen:baseline .
-    docker build -t subtitlegen:whisperx -f Dockerfile.whisperx .
-    docker build -t subtitlegen:nemo -f Dockerfile.nemo .
-    docker build -t subtitlegen:visual -f Dockerfile.ocr .
+    docker build -t subtitlegen:whisperx --build-arg PIP_EXTRAS=cuda .
+    docker build -t subtitlegen:nemo --build-arg PIP_EXTRAS=nemo .
+    docker build -t subtitlegen:visual --build-arg "APT_PACKAGES=ffmpeg libgl1" --build-arg PIP_EXTRAS=cuda,ocr .
 
     $TestProfiles = @{
         "cuda" = "subtitlegen:test-cuda"
@@ -41,10 +41,10 @@ try {
     $env:MODEL_CACHE_HOST_PATH = $ModelCache
     $env:JOB_CACHE_HOST_PATH = $JobCache
     docker compose config --quiet
-    docker compose run --rm subtitler --help
+    docker compose --profile subtitler run --rm subtitler --help
 
     $VideoMount = "${VideoPath}:/data/videos"
-    docker compose run --rm --build subtitler `
+    docker compose --profile subtitler run --rm --build subtitler `
         generate /data/videos --backend faster-whisper --cache-dir /cache
     docker run --rm --gpus all -v "$VideoMount" -v "${ModelCache}:/models" `
         -v "${JobCache}:/cache" subtitlegen:baseline `

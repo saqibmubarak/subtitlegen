@@ -54,11 +54,11 @@ def test_parakeet_normalizes_timestamps_reuses_and_releases_model(tmp_path: Path
 
     assert [word.text for word in result.words] == ["Hello", " world"]
     assert result.language == "en"
-    assert result.duration == 1.4
+    assert result.duration == 1.0
     assert names == [ParakeetBackend.DEFAULT_MODEL]
     assert created[0].calls[0]["batch_size"] == 1
     assert created[0].calls[0]["timestamps"] is True
-    assert created[0].calls[0]["audio"][0] is SILENCE
+    assert np.array_equal(created[0].calls[0]["audio"][0], SILENCE)
     assert not backend.capabilities.context_prompt
 
     backend.close()
@@ -109,3 +109,55 @@ def test_parakeet_downmixes_stereo_media_before_nemo(tmp_path: Path) -> None:
     assert audio.ndim == 1
     assert audio.dtype == np.float32
     assert 15_900 <= audio.size <= 16_100
+
+
+def test_parakeet_windows_long_audio_and_offsets_timestamps(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    audio = np.zeros(45 * 16_000, dtype=np.float32)
+    model = FakeModel()
+    result = ParakeetBackend(
+        AsrSettings(),
+        model_factory=lambda _name: model,
+        audio_loader=lambda _path: audio,
+        window_seconds=20.0,
+        overlap_seconds=0.0,
+    ).transcribe(media)
+
+    assert len(model.calls) == 3
+    assert [len(call["audio"][0]) for call in model.calls] == [
+        20 * 16_000,
+        20 * 16_000,
+        5 * 16_000,
+    ]
+    assert result.duration == 45.0
+    assert {word.start for word in result.words} >= {0.0, 20.0, 40.0}
+
+
+def test_parakeet_splits_window_after_oom(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    audio = np.zeros(20 * 16_000, dtype=np.float32)
+
+    class SplitThenOk:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def transcribe(self, chunks: list[Any], **_kwargs: Any) -> list[Any]:
+            self.calls += 1
+            if len(chunks[0]) > 12 * 16_000:
+                raise RuntimeError("CUDA out of memory")
+            return FakeModel().transcribe(chunks)
+
+    model = SplitThenOk()
+    result = ParakeetBackend(
+        AsrSettings(),
+        model_factory=lambda _name: model,
+        audio_loader=lambda _path: audio,
+        window_seconds=20.0,
+        overlap_seconds=1.0,
+    ).transcribe(media)
+
+    assert model.calls >= 3
+    assert result.words
+    assert result.duration == 20.0

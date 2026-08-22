@@ -1,0 +1,25 @@
+---
+description: Keep ReadMe.md in sync with CLI, Compose, and presets
+alwaysApply: true
+---
+
+# Keep the README updated
+
+When you change how a user runs this project, update [ReadMe.md](ReadMe.md) in the same change.
+
+Update it when you add, rename, or remove:
+
+- Compose profiles, services, or recommended commands (`windows`, `nemo`, `ocr`, `run`, `up`, `build`)
+- CLI flags, env vars, or `.env.example` keys
+- Presets, backends, or Docker build args
+- Install extras, cache paths, or overwrite / resume behavior
+
+The Windows default command is:
+
+```powershell
+docker compose --profile windows build
+docker compose --profile windows up
+docker compose --profile windows down
+```
+
+Do not leave old `docker compose run` examples as the only documented path if a newer command replaced them. Keep copy-pasteable PowerShell/bash blocks accurate.

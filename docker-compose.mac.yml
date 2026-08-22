@@ -11,3 +11,7 @@ services:
     deploy: {}
   visual:
     deploy: {}
+  windows-dialogue:
+    deploy: {}
+  windows-titles:
+    deploy: {}

@@ -46,8 +46,8 @@ paths. Docker Desktop converts these mounted paths into Linux container paths.
 Copy-Item .env.example .env
 # Set VIDEO_HOST_PATH with forward slashes, then:
 docker compose config --quiet
-docker compose --profile ocr build visual
-docker compose --profile ocr run --rm visual
+docker compose --profile windows build
+docker compose --profile windows up
 ```
 
 Generate options (`SUBTITLEGEN_PRESET`, cache, OCR probe interval) come from
