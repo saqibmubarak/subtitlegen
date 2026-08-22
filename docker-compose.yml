@@ -3,6 +3,8 @@ x-subtitlegen-environment: &subtitlegen-environment
   PYTHONUNBUFFERED: "1"
   SUBTITLEGEN_PRESET: ${SUBTITLEGEN_PRESET:-quality}
   SUBTITLEGEN_CACHE_DIR: /cache
+  SUBTITLEGEN_BACKEND: ${SUBTITLEGEN_BACKEND:-auto}
+  SUBTITLEGEN_OVERWRITE: ${SUBTITLEGEN_OVERWRITE:-0}
   SUBTITLEGEN_VISUAL_PROBE_SECONDS: ${SUBTITLEGEN_VISUAL_PROBE_SECONDS:-4}
   SUBTITLEGEN_VISUAL_REFINE_SECONDS: ${SUBTITLEGEN_VISUAL_REFINE_SECONDS:-12}
   SUBTITLEGEN_ENRICH_GLOSSARY: ${SUBTITLEGEN_ENRICH_GLOSSARY:-1}
@@ -51,11 +53,12 @@ services:
       dockerfile: Dockerfile.nemo
     environment:
       <<: *subtitlegen-environment
-      SUBTITLEGEN_PRESET: ${SUBTITLEGEN_PRESET:-english-fast}
+      SUBTITLEGEN_PRESET: english-fast
+      SUBTITLEGEN_BACKEND: parakeet
     volumes: *subtitlegen-volumes
     deploy:
       <<: *gpu
-    command: ["generate", "/data/videos"]
+    command: ["generate", "/data/videos", "--no-visual-text"]
 
   visual:
     profiles: ["ocr"]

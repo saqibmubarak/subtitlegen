@@ -1,60 +1,353 @@
 # Subtitlegen
 
-Local, resumable subtitle generation with word-level timing. See the [design and requirements](docs/README.md).
+Local subtitle generator for dubbed video. It transcribes English dialogue with
+word-level timing, corrects series names from a glossary, and (for anime)
+translates Japanese on-screen titles into a second ASS layer.
 
-## Mac Apple Silicon
+You run it on a file or a folder. It writes:
 
-Requires Python 3.11 or 3.12. FFmpeg is optional because media access uses PyAV.
+| File | What it is |
+|---|---|
+| `episode.srt` | Dialogue only (players, editors, compatibility) |
+| `episode.ass` | Dialogue plus yellow `OnScreen` titles |
+| `.subtitlegen/` | Resume cache (ASR, jobs, models if you point caches here) |
+
+It does **not** upload video. Models download on first use, then work offline.
+
+Python **3.11 or 3.12**. FFmpeg is optional; media I/O uses PyAV. Design notes
+live under [docs/](docs/README.md).
+
+---
+
+## What a run does
+
+1. **Discover** `.mp4` / `.mkv` / `.avi` / `.mov` / `.wmv` (see `config.ini`).
+2. **Infer a series profile** from the path (`Dressrosa` → One Piece). Expand
+   names from shipped YAML plus optional Wikipedia (`SUBTITLEGEN_ENRICH_GLOSSARY`).
+3. **ASR** with the selected preset. Existing valid `.srt` files are skipped
+   unless you pass `--overwrite`.
+4. **Cue building** (max length, gaps, punctuation) and glossary spelling fix
+   (`Doflamingo`, not `Dofuramingo`).
+5. **On-screen Japanese** (default on): coarse 4 s probe for title-script
+   (kanji / katakana), then 1 s refine in a ±12 s window. Paddle OCR reads HUD
+   cards; NLLB-200 translates to English. Use `--no-visual-text` to skip.
+
+`--preset` only picks the **speech** model. Visual OCR is the same on every
+preset.
+
+---
+
+## Presets
+
+`--preset` / `SUBTITLEGEN_PRESET` chooses the dialogue backend. `auto` backend
+picks the adapter from what is installed.
+
+| Preset | Apple Silicon (MLX installed) | NVIDIA CUDA | CPU fallback |
+|---|---|---|---|
+| **`quality`** (default in Docker) | MLX Whisper **large-v3** | WhisperX large-v3 if the WhisperX image/package is present, else faster-whisper large-v3 fp16 | faster-whisper large-v3 int8 |
+| **`fast`** | MLX **large-v3-turbo** | faster-whisper turbo fp16 | faster-whisper turbo int8 |
+| **`english-fast`** | same as `fast` (Parakeet is CUDA-only) | NVIDIA Parakeet TDT 0.6B v3 | same as `fast` |
+
+`quality` is slower and better on names. `fast` is weaker on grammar and
+glossary terms. `english-fast` is English-only and needs the NeMo image.
+
+Override the adapter with `--backend auto|mlx|faster-whisper|whisperx|parakeet`.
+
+---
+
+## macOS Apple Silicon (native)
+
+From a clone of this repo. First run downloads several GB of models (Whisper,
+Paddle, NLLB) and needs a network connection.
 
 ```bash
-python -m venv .venv
-.venv/bin/python -m pip install -e '.[mac,ocr]'
-.venv/bin/subtitlegen generate /path/to/videos --preset quality
+cd subtitlegen
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[mac,ocr]'
+subtitlegen --help
+
+subtitlegen generate "/path/to/episode.mp4" --preset quality
+subtitlegen generate "/path/to/folder" --preset quality --overwrite
 ```
 
-`auto` selects MLX when its optional package is installed and falls back to faster-whisper CPU otherwise.
+Keep caches inside the repo if you want:
 
-## Windows with NVIDIA Docker
+```bash
+export HF_HOME="$PWD/.subtitlegen/hf"
+export PADDLE_PDX_CACHE_HOME="$PWD/.subtitlegen/paddle"
+subtitlegen generate "samples/[Muhn Pace] Dressrosa 01.mp4" \
+  --preset quality --cache-dir .subtitlegen
+```
 
-Install Docker Desktop, NVIDIA drivers, and NVIDIA Container Toolkit. Copy `.env.example` to `.env` and set **host** paths there. Use forward slashes on Windows (`C:/Users/...`). Do not pass Windows paths to `generate`; inside the container videos are always `/data/videos`.
+Docker on Mac works but has no NVIDIA GPU. Prefer native. If you must use
+Compose, drop GPU reservations:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mac.yml --profile ocr run --rm visual
+```
+
+Parakeet (`english-fast` / `parakeet` service) cannot run on Mac.
+
+---
+
+## Windows (Docker + NVIDIA) — recommended
+
+Native Windows + PaddleOCR is brittle. Use **Docker Desktop (WSL2)** plus
+current NVIDIA drivers so `docker run --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi` works.
+
+Prerequisites: Windows 11, Git, PowerShell, Docker Desktop with the WSL2
+backend and GPU enabled.
+
+### 1. Clone, copy `.env`, point at your videos
 
 ```powershell
+cd subtitlegen
 Copy-Item .env.example .env
-# edit VIDEO_HOST_PATH, then:
+notepad .env
+```
+
+Set `VIDEO_HOST_PATH` to the folder that **already contains** the `.mp4` /
+`.mkv` files. The default `./videos` is a folder next to `docker-compose.yml`;
+create it and copy videos there, or set an absolute path.
+
+Use **forward slashes** (`C:/Users/you/Videos/Dressrosa`). A backslash before
+`n` becomes a newline and the mount will be wrong.
+
+| Variable | Purpose | Typical value |
+|---|---|---|
+| `VIDEO_HOST_PATH` | Host folder of videos (required) | `C:/Users/you/Videos/Dressrosa` |
+| `MODEL_CACHE_HOST_PATH` | Hugging Face / Paddle weights | `./model_cache` |
+| `JOB_CACHE_HOST_PATH` | Resume jobs | `./.subtitlegen-docker` |
+| `SUBTITLEGEN_PRESET` | `quality`, `fast`, or `english-fast` | `quality` |
+| `SUBTITLEGEN_BACKEND` | Usually `auto` | `auto` |
+| `SUBTITLEGEN_CACHE_DIR` | Cache **inside** the container | `/cache` |
+| `SUBTITLEGEN_PROFILE` | Not forwarded from `.env` (empty string would break inference). Pass a flag. | `--profile one-piece` |
+| `SUBTITLEGEN_ARC` | Same as profile | `--arc Dressrosa` |
+| `SUBTITLEGEN_VISUAL_PROBE_SECONDS` | Coarse title scan | `4` |
+| `SUBTITLEGEN_VISUAL_REFINE_SECONDS` | Window around a hit | `12` |
+| `SUBTITLEGEN_ENRICH_GLOSSARY` | Wikipedia name fetch | `1` |
+| `SUBTITLEGEN_OVERWRITE` | Rebuild existing SRT | `0`, or `1` to regenerate |
+
+Videos are always **`/data/videos` inside the container**. Do not pass
+`D:\...` as the `generate` path.
+
+### 2. Windows default: Parakeet dialogue + OCR titles
+
+NeMo/Parakeet and Paddle OCR are **two images**. Do not put both in one
+container (VRAM and install size). Run them in order on the same
+`VIDEO_HOST_PATH`. The second step **skips** ASR when a valid `.srt` already
+exists, then writes the `.ass`.
+
+```powershell
+# First time only: build both images
+docker compose --profile nemo build parakeet
+docker compose --profile ocr build visual
+
+# 1) English dialogue with Parakeet (no OCR in this image)
+docker compose --profile nemo run --rm parakeet
+
+# 2) Japanese on-screen titles; reuses the Parakeet SRT
 docker compose --profile ocr run --rm visual
 ```
 
-That command reads `SUBTITLEGEN_PRESET`, cache, and OCR probe settings from `.env`. Generated SRT (dialogue) and ASS (dialogue + on-screen titles) are written beside the mounted videos.
+Do **not** set `SUBTITLEGEN_OVERWRITE=1` on step 2. Overwrite would wipe the
+Parakeet SRT and re-transcribe with faster-whisper.
 
-Other images, if you need them:
+To redo **titles only** after a Parakeet SRT exists, just run step 2 again
+(visual cache key changes also rebuild ASS). To redo **dialogue**, run step 1
+with overwrite, then step 2:
 
 ```powershell
-docker compose run --rm subtitler
-docker compose --profile whisperx run --rm whisperx
-docker compose --profile nemo run --rm parakeet
+docker compose --profile nemo run --rm -e SUBTITLEGEN_OVERWRITE=1 parakeet
+docker compose --profile ocr run --rm visual
 ```
 
-Existing `.srt` files are skipped. Pass `--overwrite` or set `SUBTITLEGEN_OVERWRITE=1` only when you want to regenerate them.
+Outputs land next to the videos: `episode.srt` (Parakeet) and `episode.ass`
+(dialogue + `OnScreen`).
+
+Force the One Piece glossary on the title pass:
+
+```powershell
+docker compose --profile ocr run --rm visual generate /data/videos --profile one-piece --arc Dressrosa
+```
+
+### 3. Whisper instead of Parakeet (one container)
+
+If you want Whisper `quality` and titles in a **single** run (no Parakeet):
+
+```powershell
+docker compose --profile ocr run --rm visual
+```
+
+That uses faster-whisper large-v3 in the OCR image, then Paddle/NLLB.
+
+| Command | When to use |
+|---|---|
+| `parakeet` then `visual` (section 2) | **Windows recommended.** Parakeet SRT + OCR ASS |
+| `docker compose --profile ocr run --rm visual` | One-shot Whisper + titles |
+| `docker compose run --rm subtitler generate /data/videos --no-visual-text` | Dialogue only, no NeMo/OCR |
+| `docker compose --profile whisperx run --rm whisperx` | WhisperX alignment; add `visual` after if you want titles |
+
+Compose already passes `generate /data/videos`. Extra flags:
+
+```powershell
+docker compose --profile ocr run --rm visual generate /data/videos --preset fast --no-visual-text
+docker compose --profile ocr run --rm visual generate /data/videos --profile one-piece --arc Dressrosa
+```
+
+### 4. Optional native Windows (no Docker)
+
+Only if you have Python 3.11/3.12 and do **not** need Paddle titles:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
+.\.venv\Scripts\subtitlegen.exe generate C:\Videos\episode.mp4 --preset fast --no-visual-text
+```
+
+CUDA WhisperX: `pip install -e ".[cuda]"`. OCR extras on Windows are
+unsupported here; use the `visual` image.
+
+---
 
 ## Commands
 
-```bash
-subtitlegen generate VIDEO_OR_DIRECTORY
-subtitlegen generate VIDEO_OR_DIRECTORY --preset fast|quality|english-fast
-subtitlegen generate VIDEO --profile one-piece --arc Dressrosa
-subtitlegen generate VIDEO --no-visual-text
+```text
+subtitlegen generate PATH
+    PATH = one video or a directory (recursive).
+
+    --preset quality|fast|english-fast
+    --backend auto|mlx|faster-whisper|whisperx|parakeet
+    --config config.ini
+    --cache-dir .subtitlegen
+    --output-dir DIR          # default: beside each video
+    --overwrite               # rebuild SRT (and then ASS)
+    --profile one-piece       # else inferred from the path
+    --profiles-dir DIR
+    --arc Dressrosa --episode 03
+    --auto-profile / --no-auto-profile
+    --local-correction / --no-local-correction
+    --visual-text / --no-visual-text
+    --visual-probe-seconds 4
+    --visual-refine-seconds 12
+    --visual-fps 1.5
+    --visual-min-japanese-characters 5
+    --detector-model comic-dbnet.onnx
+    --verbose
+
 subtitlegen validate SUBTITLE.srt
-subtitlegen benchmark VIDEO [--backend auto]
+subtitlegen benchmark VIDEO [--preset quality] [--backend auto]
 ```
 
-`--preset quality` uses Whisper `large-v3` (WhisperX forced alignment when that package is installed; otherwise faster-whisper large-v3). `--preset fast` is turbo and is weaker on names and grammar.
+These `generate` flags also read env vars (Compose forwards the ones in `.env`):
+`--preset`, `--backend`, `--config`, `--cache-dir`, `--output-dir`, `--profile`,
+`--arc`, `--overwrite`, `--visual-fps`, `--visual-probe-seconds`,
+`--visual-refine-seconds`. `SUBTITLEGEN_ENRICH_GLOSSARY` is env-only.
+Run `subtitlegen generate --help` for the rest.
 
-Give a file or directory. The CLI infers the series name, expands a glossary from shipped YAML plus Wikipedia/search, applies gated spelling correction, and runs Japanese on-screen translation for anime. OCR first scans coarsely for Japanese characters, then reads only the windows around hits.
+### Examples
 
-Configuration defaults are in `config.ini`. Docker defaults are in `.env`. First use may download a model; cached runs can operate offline.
-See [ASR backends and presets](docs/07-asr-backends.md) for optional CUDA adapters.
-See [Japanese visual text](docs/08-visual-text.md) for local OCR, translation, and ASS output.
-For clean Mac/Windows setup and the RTX acceptance runner, see
-[platform setup](docs/09-platform-setup.md). Review the
-[model/license manifest](docs/10-model-licenses.md), especially NLLB's
-non-commercial restriction, before deployment.
+```bash
+# One episode, best local speech model, titles on
+subtitlegen generate "samples/[Muhn Pace] Dressrosa 01.mp4" --preset quality --overwrite
+
+# A season folder; skip titles
+subtitlegen generate ./videos --preset fast --no-visual-text
+
+# Force One Piece glossary
+subtitlegen generate ./videos --profile one-piece --arc Dressrosa --preset quality
+```
+
+```powershell
+# Windows: Parakeet SRT, then OCR ASS (do not overwrite on the second command)
+docker compose --profile nemo run --rm parakeet
+docker compose --profile ocr run --rm visual
+
+# Windows: Whisper quality + titles in one container
+docker compose --profile ocr run --rm visual
+```
+
+---
+
+## Config files
+
+**`config.ini`** (native and mounted into Docker as `/app/config.ini`):
+
+- `[TRANSCRIPTION]` — `device`, `model_name`, `language` (`en`), `compute_type`,
+  `beam_size`, `whisperx_batch_size`. If VRAM dies on 8 GB, lower
+  `whisperx_batch_size` or use `--preset fast`.
+- `[VAD]` — silence / speech padding.
+- `[CUES]` — max cue duration (6 s), max characters (84), gap flatten.
+- `[FILES]` — video extensions.
+
+CLI `--preset` **overrides** `model_name` from this file.
+
+**`.env`** — Docker host paths and `SUBTITLEGEN_*` only. Not used by native
+`subtitlegen` unless you export those variables yourself.
+
+**`profiles/*.yaml`** — shipped glossaries (`one-piece`, `avatar`) plus
+`visual_translations` (exact / fuzzy Japanese → English title lines).
+
+---
+
+## Cache and overwrite
+
+| Artifact | Reused when |
+|---|---|
+| `.srt` | File exists and parses as valid SRT |
+| ASR job under `--cache-dir/jobs` | Same backend + model + decode key |
+| Visual job | Same detector, OCR, NLLB, profile, and `title-scan-v7` key |
+
+`--overwrite` rebuilds the SRT (and then the ASS). Changing the visual cache
+key (detector, glossary, scan version) rebuilds titles even if the SRT is
+kept.
+
+---
+
+## On-screen titles (current behavior)
+
+Default **on**. Probe every 4 s and on cuts for title-script; refine at 1 s
+with a fresh detect (boxes are not frozen). Horizontal cards: furigana mask +
+Paddle rec. Manga OCR only for tall vertical crops. Translation: profile
+`visual_translations` first, then local NLLB-200 600M.
+
+NLLB’s license is **non-commercial** for many uses. See
+[docs/10-model-licenses.md](docs/10-model-licenses.md).
+
+More detail: [docs/08-visual-text.md](docs/08-visual-text.md).
+
+---
+
+## Tests and acceptance
+
+```bash
+python -m pip install -e '.[mac,ocr,dev]'   # or .[dev] in the test image
+ruff check .
+mypy src
+pytest -q
+```
+
+Windows RTX batch (builds images, CUDA check, sample episodes):
+
+```powershell
+pwsh ./scripts/windows-rtx-acceptance.ps1 `
+  -VideoPath "D:\Anime" `
+  -AvatarFile "Avatar Episode.mp4" `
+  -DressrosaFile "[Muhn Pace] Dressrosa 03.mp4"
+```
+
+---
+
+## More docs
+
+| Doc | Topic |
+|---|---|
+| [docs/07-asr-backends.md](docs/07-asr-backends.md) | Presets, WhisperX, Parakeet |
+| [docs/08-visual-text.md](docs/08-visual-text.md) | OCR / NLLB / ASS |
+| [docs/09-platform-setup.md](docs/09-platform-setup.md) | Mac + Windows RTX setup |
+| [docs/06-series-profiles.md](docs/06-series-profiles.md) | Glossaries |
+| [docs/10-model-licenses.md](docs/10-model-licenses.md) | Model licenses |
