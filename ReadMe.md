@@ -165,7 +165,8 @@ Dependency wheels are cached; only `pyproject.toml` extras trigger a full
 re-download. Hugging Face weights in `MODEL_CACHE_HOST_PATH` stay on disk.
 
 Parakeet (`english-fast`, backend `auto`) downmixes stereo to 16 kHz mono and
-transcribes in **20 s windows** so an 8 GB GPU does not OOM on a full episode.
+transcribes **batched 20 s windows**. A full-episode tensor OOMs; if a batch
+does, it splits and retries.
 
 Do **not** set `SUBTITLEGEN_OVERWRITE=1` on the title image. Overwrite would
 wipe the Parakeet SRT and re-transcribe with faster-whisper.

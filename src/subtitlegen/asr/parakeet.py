@@ -19,10 +19,12 @@ ModelFactory = Callable[[str], Any]
 AudioLoader = Callable[[Path], Any]
 
 SAMPLE_RATE = 16_000
-# NeMo recommends 5–25 s per forward pass. A full episode OOMs on 8 GB.
+# NeMo recommends 5–25 s per forward pass. A full episode as one tensor OOMs;
+# several equal windows in one batch keep the GPU busy.
 WINDOW_SECONDS = 20.0
 OVERLAP_SECONDS = 1.0
 MIN_WINDOW_SECONDS = 5.0
+BATCH_SIZE = 8
 
 
 class ParakeetBackend:
@@ -38,12 +40,16 @@ class ParakeetBackend:
         audio_loader: AudioLoader = load_audio_mono,
         window_seconds: float = WINDOW_SECONDS,
         overlap_seconds: float = OVERLAP_SECONDS,
+        batch_size: int = BATCH_SIZE,
     ) -> None:
+        if batch_size < 1:
+            raise ValueError("Parakeet batch size must be at least 1")
         self._settings = settings
         self._model_factory = model_factory
         self._audio_loader = audio_loader
         self._window_seconds = window_seconds
         self._overlap_seconds = overlap_seconds
+        self._batch_size = batch_size
         self._model: Any | None = None
 
     @property
@@ -104,13 +110,19 @@ class ParakeetBackend:
             _audio_windows(audio, SAMPLE_RATE, window_seconds, self._overlap_seconds)
         )
         words: list[Word] = []
-        for index, (local_offset, chunk, is_last) in enumerate(windows):
+        index = 0
+        while index < len(windows):
+            batch = windows[index : index + self._batch_size]
             try:
-                hypothesis = self._decode_chunk(chunk, allow_cuda_retry=True)
+                hypotheses = self._decode_batch(
+                    [chunk for _offset, chunk, _last in batch],
+                    allow_cuda_retry=True,
+                )
             except Exception as error:
                 if not _is_oom(error):
                     raise
                 self.close()
+                local_offset, chunk, _is_last = batch[0]
                 smaller = window_seconds / 2
                 if smaller < MIN_WINDOW_SECONDS:
                     raise BackendOutOfMemoryError(
@@ -128,36 +140,62 @@ class ParakeetBackend:
                         window_seconds=smaller,
                     )
                 )
+                index += 1
                 continue
-            chunk_seconds = len(chunk) / SAMPLE_RATE
-            words.extend(
-                _keep_window_words(
-                    _words_from_hypothesis(hypothesis, offset + local_offset),
-                    offset + local_offset,
-                    chunk_seconds,
-                    self._overlap_seconds,
-                    first=index == 0,
-                    last=is_last,
+            for local_index, ((local_offset, chunk, is_last), hypothesis) in enumerate(
+                zip(batch, hypotheses, strict=True)
+            ):
+                chunk_seconds = len(chunk) / SAMPLE_RATE
+                words.extend(
+                    _keep_window_words(
+                        _words_from_hypothesis(hypothesis, offset + local_offset),
+                        offset + local_offset,
+                        chunk_seconds,
+                        self._overlap_seconds,
+                        first=index + local_index == 0,
+                        last=is_last,
+                    )
                 )
-            )
+            index += len(batch)
         return words
 
-    def _decode_chunk(self, chunk: Any, *, allow_cuda_retry: bool) -> Any:
+    def _decode_batch(self, chunks: list[Any], *, allow_cuda_retry: bool) -> list[Any]:
         try:
             return self._load_model().transcribe(
-                [chunk],
-                batch_size=1,
+                chunks,
+                batch_size=len(chunks),
                 timestamps=True,
                 verbose=False,
-            )[0]
+            )
         except Exception as error:
-            if _is_oom(error) or not _is_cuda_fault(error):
+            if _is_oom(error):
+                self.close()
+                if len(chunks) == 1:
+                    raise
+                logger.warning(
+                    "Parakeet OOM on batch of %d; splitting",
+                    len(chunks),
+                )
+                mid = len(chunks) // 2
+                return self._decode_batch(
+                    chunks[:mid], allow_cuda_retry=True
+                ) + self._decode_batch(chunks[mid:], allow_cuda_retry=True)
+            if not _is_cuda_fault(error):
                 raise
             self.close()
-            if not allow_cuda_retry:
-                raise
-            logger.warning("Parakeet CUDA fault; reloading model and retrying window")
-            return self._decode_chunk(chunk, allow_cuda_retry=False)
+            if allow_cuda_retry:
+                logger.warning("Parakeet CUDA fault; reloading model and retrying batch")
+                return self._decode_batch(chunks, allow_cuda_retry=False)
+            if len(chunks) > 1:
+                logger.warning(
+                    "Parakeet CUDA fault on batch of %d; splitting",
+                    len(chunks),
+                )
+                mid = len(chunks) // 2
+                return self._decode_batch(
+                    chunks[:mid], allow_cuda_retry=True
+                ) + self._decode_batch(chunks[mid:], allow_cuda_retry=True)
+            raise
 
     def _load_model(self) -> Any:
         if self._model is not None:

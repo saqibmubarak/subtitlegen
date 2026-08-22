@@ -40,9 +40,10 @@ docker compose --profile nemo run --rm parakeet
 
 WhisperX consumes profile prompts and hotwords before forced alignment.
 Parakeet is English-only and CUDA-only, so it cannot run on Mac (including
-Docker Desktop). It downmixes to 16 kHz mono and transcribes in 20 s windows so
-an 8 GB GPU can finish a full episode. Glossary correction still runs after
-Parakeet transcription; the model itself does not consume Whisper-style prompts.
+Docker Desktop). It downmixes to 16 kHz mono and transcribes batched 20 s
+windows so a full episode does not OOM. A VRAM fault halves the batch, then the
+window. Glossary correction still runs after Parakeet transcription; the model
+itself does not consume Whisper-style prompts.
 
 If WhisperX exhausts an 8 GB GPU, lower `whisperx_batch_size` in the
 `[TRANSCRIPTION]` section of `config.ini` or select `fast`.

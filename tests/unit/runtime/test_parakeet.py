@@ -20,17 +20,16 @@ class FakeModel:
 
     def transcribe(self, audio: list[Any], **kwargs: Any) -> list[Any]:
         self.calls.append({"audio": audio, **kwargs})
-        return [
-            SimpleNamespace(
-                timestamp={
-                    "word": [
-                        {"start": 1.0, "end": 1.4, "word": " world"},
-                        {"start": 0.0, "end": 0.5, "word": "Hello"},
-                        {"start": None, "end": None, "word": "skip"},
-                    ]
-                }
-            )
-        ]
+        hypothesis = SimpleNamespace(
+            timestamp={
+                "word": [
+                    {"start": 1.0, "end": 1.4, "word": " world"},
+                    {"start": 0.0, "end": 0.5, "word": "Hello"},
+                    {"start": None, "end": None, "word": "skip"},
+                ]
+            }
+        )
+        return [hypothesis] * len(audio)
 
 
 def test_parakeet_normalizes_timestamps_reuses_and_releases_model(tmp_path: Path) -> None:
@@ -125,12 +124,13 @@ def test_parakeet_windows_long_audio_and_offsets_timestamps(tmp_path: Path) -> N
         overlap_seconds=0.0,
     ).transcribe(media)
 
-    assert len(model.calls) == 3
-    assert [len(call["audio"][0]) for call in model.calls] == [
+    assert len(model.calls) == 1
+    assert [len(chunk) for chunk in model.calls[0]["audio"]] == [
         20 * 16_000,
         20 * 16_000,
         5 * 16_000,
     ]
+    assert model.calls[0]["batch_size"] == 3
     assert result.duration == 45.0
     assert {word.start for word in result.words} >= {0.0, 20.0, 40.0}
 
@@ -157,6 +157,7 @@ def test_parakeet_splits_window_after_oom(tmp_path: Path) -> None:
         audio_loader=lambda _path: audio,
         window_seconds=20.0,
         overlap_seconds=1.0,
+        batch_size=1,
     ).transcribe(media)
 
     assert model.calls >= 3
@@ -185,3 +186,34 @@ def test_parakeet_reloads_model_after_cuda_illegal_access(tmp_path: Path) -> Non
 
     assert loads["count"] == 2
     assert result.words
+
+
+def test_parakeet_splits_batch_after_oom(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    audio = np.zeros(45 * 16_000, dtype=np.float32)
+
+    class BatchThenOk:
+        def __init__(self) -> None:
+            self.sizes: list[int] = []
+
+        def transcribe(self, chunks: list[Any], **_kwargs: Any) -> list[Any]:
+            self.sizes.append(len(chunks))
+            if len(chunks) > 1:
+                raise RuntimeError("CUDA out of memory")
+            return FakeModel().transcribe(chunks)
+
+    model = BatchThenOk()
+    result = ParakeetBackend(
+        AsrSettings(),
+        model_factory=lambda _name: model,
+        audio_loader=lambda _path: audio,
+        window_seconds=20.0,
+        overlap_seconds=0.0,
+        batch_size=3,
+    ).transcribe(media)
+
+    assert model.sizes[0] == 3
+    assert model.sizes.count(1) == 3
+    assert result.duration == 45.0
+    assert {word.start for word in result.words} >= {0.0, 20.0, 40.0}
