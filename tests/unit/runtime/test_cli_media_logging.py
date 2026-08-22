@@ -231,6 +231,55 @@ def test_cli_reads_preset_from_environment(monkeypatch: Any) -> None:
     assert settings.asr.language == "en"
 
 
+def test_cli_reuse_srt_skips_asr_and_runs_visual(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "episode.mp4"
+    video.touch()
+    video.with_suffix(".srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+        encoding="utf-8",
+    )
+    missing = tmp_path / "missing.mp4"
+    missing.touch()
+
+    class FakeMultimodal:
+        def __init__(self) -> None:
+            self.outputs: list[Path] = []
+            self.closed = False
+
+        def process(
+            self,
+            _video: Path,
+            _dialogue: Path,
+            output: Path,
+        ) -> MultimodalResult:
+            self.outputs.append(output)
+            output.write_text("ASS", encoding="utf-8")
+            return MultimodalResult(output, 1, 1)
+
+        def close(self) -> None:
+            self.closed = True
+
+    multimodal = FakeMultimodal()
+    monkeypatch.setattr(
+        cli_module,
+        "_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("asr")),
+    )
+    monkeypatch.setattr(cli_module, "_visual_service", lambda *_args, **_kwargs: multimodal)
+
+    result = CliRunner().invoke(
+        app,
+        ["generate", str(tmp_path), "--reuse-srt", "--visual-text"],
+    )
+
+    assert result.exit_code == 1
+    assert multimodal.outputs == [video.with_suffix(".ass")]
+    assert multimodal.closed
+
+
 def test_cli_visual_text_runs_after_dialogue_and_writes_ass(
     monkeypatch: Any,
     tmp_path: Path,

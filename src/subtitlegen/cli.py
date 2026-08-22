@@ -390,12 +390,15 @@ def generate(
         bool,
         typer.Option("--overwrite", envvar="SUBTITLEGEN_OVERWRITE"),
     ] = False,
+    reuse_srt: Annotated[
+        bool,
+        typer.Option("--reuse-srt/--transcribe", envvar="SUBTITLEGEN_REUSE_SRT"),
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
     """Generate SRT files recursively, resuming valid cached stages."""
     configure_logging(verbose)
     settings = SettingsLoader().load(config)
-    settings, backend = _resolve_runtime(settings, backend, preset)
     videos = discover_media(input_path, settings.video_extensions)
     if not videos:
         raise typer.BadParameter("no supported media files were found")
@@ -422,15 +425,6 @@ def generate(
         "on-screen text extraction %s",
         "enabled" if use_visual else "disabled",
     )
-    service, selected = _service(
-        settings,
-        backend,
-        cache_dir,
-        series_profile,
-        arc=selected_arc,
-        episode=selected_episode,
-        local_correction=local_correction,
-    )
 
     failures = 0
     generated: list[tuple[Path, Path]] = []
@@ -445,61 +439,82 @@ def generate(
 
     jobs = [(video, output_for(video)) for video in videos]
 
-    def needed_from(start: int) -> list[Path]:
-        return [
-            video
-            for video, output in jobs[start:]
-            if overwrite or not is_valid_srt(output)
-        ]
-
-    prefetch = getattr(service, "prefetch_audio", None)
-    if prefetch is not None:
-        for video in needed_from(0)[:2]:
-            prefetch(video)
-    enrich_outputs: list[Path] = []
-    try:
-        for index, (video, output) in enumerate(jobs):
-            if prefetch is not None:
-                for video_ahead in needed_from(index + 1)[:2]:
-                    prefetch(video_ahead)
-            try:
-                result = service.process(
-                    video,
-                    output,
-                    language=settings.asr.language,
-                    overwrite=overwrite,
-                )
+    if reuse_srt:
+        logger.info("reusing existing dialogue SRT; ASR is disabled")
+        for video, output in jobs:
+            if is_valid_srt(output):
                 generated.append((video, output))
-                if result.status == "skipped":
-                    logger.info(
-                        "skipped: %s already exists; pass --overwrite to regenerate",
+                logger.info("reused: %s", output)
+            else:
+                failures += 1
+                logger.error("no dialogue SRT for %s", video)
+    else:
+        settings, backend = _resolve_runtime(settings, backend, preset)
+        service, selected = _service(
+            settings,
+            backend,
+            cache_dir,
+            series_profile,
+            arc=selected_arc,
+            episode=selected_episode,
+            local_correction=local_correction,
+        )
+
+        def needed_from(start: int) -> list[Path]:
+            return [
+                video
+                for video, output in jobs[start:]
+                if overwrite or not is_valid_srt(output)
+            ]
+
+        prefetch = getattr(service, "prefetch_audio", None)
+        if prefetch is not None:
+            for video in needed_from(0)[:2]:
+                prefetch(video)
+        enrich_outputs: list[Path] = []
+        try:
+            for index, (video, output) in enumerate(jobs):
+                if prefetch is not None:
+                    for video_ahead in needed_from(index + 1)[:2]:
+                        prefetch(video_ahead)
+                try:
+                    result = service.process(
+                        video,
                         output,
+                        language=settings.asr.language,
+                        overwrite=overwrite,
                     )
-                else:
-                    enrich_outputs.append(output)
-                    logger.info("%s: %s using %s", result.status, output, selected)
-            except SubtitleWriteError as error:
-                failures += 1
-                logger.exception("failed: %s", error.path)
-            except Exception:
-                failures += 1
-                logger.exception("failed: %s", video)
-        flush = getattr(service, "flush_writes", None)
-        if flush is not None:
-            flush()
-        if series_profile is not None and auto_profile:
-            for output in enrich_outputs:
-                series_profile = _enrich_profile(
-                    series_profile,
-                    output,
-                    ProfileRepository(cache_dir / "profiles"),
-                    service,
-                    local_correction=local_correction,
-                )
-    finally:
-        close = getattr(service, "close", None)
-        if close is not None:
-            close()
+                    generated.append((video, output))
+                    if result.status == "skipped":
+                        logger.info(
+                            "skipped: %s already exists; pass --overwrite to regenerate",
+                            output,
+                        )
+                    else:
+                        enrich_outputs.append(output)
+                        logger.info("%s: %s using %s", result.status, output, selected)
+                except SubtitleWriteError as error:
+                    failures += 1
+                    logger.exception("failed: %s", error.path)
+                except Exception:
+                    failures += 1
+                    logger.exception("failed: %s", video)
+            flush = getattr(service, "flush_writes", None)
+            if flush is not None:
+                flush()
+            if series_profile is not None and auto_profile:
+                for output in enrich_outputs:
+                    series_profile = _enrich_profile(
+                        series_profile,
+                        output,
+                        ProfileRepository(cache_dir / "profiles"),
+                        service,
+                        local_correction=local_correction,
+                    )
+        finally:
+            close = getattr(service, "close", None)
+            if close is not None:
+                close()
 
     if use_visual:
         multimodal = _visual_service(

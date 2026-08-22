@@ -5,8 +5,11 @@ import pytest
 
 from subtitlegen.asr.context import AsrContext
 from subtitlegen.asr.whisperx import WhisperXBackend
+from subtitlegen.domain.models import Transcription, Word
 from subtitlegen.errors import BackendOutOfMemoryError, BackendUnavailableError
 from subtitlegen.settings import AsrSettings
+
+_OVERFLOW = "No position encodings are defined for positions >= 448, but got position 449"
 
 
 class FakeModel:
@@ -16,6 +19,22 @@ class FakeModel:
     def transcribe(self, _audio: Any, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
         return {"language": "en", "segments": [{"text": "Buggy"}]}
+
+
+class OverflowOnceModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def transcribe(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError(_OVERFLOW)
+        return {"language": "en", "segments": [{"text": "ok"}]}
+
+
+class AlwaysOverflowModel:
+    def transcribe(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(_OVERFLOW)
 
 
 class FakeWhisperX:
@@ -44,6 +63,21 @@ class FakeWhisperX:
         }
 
 
+class FallbackBackend:
+    def transcribe(
+        self,
+        _media_path: Path,
+        *,
+        language: str | None = None,
+        context: AsrContext | None = None,
+    ) -> Transcription:
+        del language, context
+        return Transcription((Word(0.0, 1.0, "fallback"),), "en", 1.0)
+
+    def close(self) -> None:
+        return None
+
+
 def test_whisperx_aligns_words_reuses_models_and_passes_context(tmp_path: Path) -> None:
     media = tmp_path / "clip.wav"
     media.touch()
@@ -54,7 +88,7 @@ def test_whisperx_aligns_words_reuses_models_and_passes_context(tmp_path: Path) 
     )
 
     first = backend.transcribe(media, context=AsrContext("Buggy", ("Buggy",)))
-    backend.transcribe(media)
+    backend.transcribe(media, context=AsrContext("Buggy", ("Buggy",)))
 
     assert first.words[0].text == " Buggy."
     assert first.duration == 1
@@ -63,7 +97,11 @@ def test_whisperx_aligns_words_reuses_models_and_passes_context(tmp_path: Path) 
     assert api.load_calls == [
         {
             "compute_type": "float16",
-            "asr_options": {"initial_prompt": "Buggy", "hotwords": "Buggy"},
+            "asr_options": {
+                "initial_prompt": "Buggy",
+                "hotwords": "Buggy",
+                "max_new_tokens": 224,
+            },
         }
     ]
     assert backend.capabilities.requires_cuda
@@ -71,6 +109,35 @@ def test_whisperx_aligns_words_reuses_models_and_passes_context(tmp_path: Path) 
     backend.transcribe(media)
     assert api.align_loads == 2
     assert len(api.load_calls) == 2
+    assert api.load_calls[1]["asr_options"]["initial_prompt"] is None
+
+
+def test_whisperx_retries_without_prompt_after_decoder_overflow(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    api = FakeWhisperX(OverflowOnceModel())
+    backend = WhisperXBackend(AsrSettings(device="cuda"), api=api)
+
+    result = backend.transcribe(media, context=AsrContext("Buggy", ("Buggy",)))
+
+    assert result.words[0].text == " Buggy."
+    assert len(api.load_calls) == 2
+    assert api.load_calls[0]["asr_options"]["initial_prompt"] == "Buggy"
+    assert api.load_calls[1]["asr_options"]["initial_prompt"] is None
+
+
+def test_whisperx_falls_back_when_decoder_still_overflows(tmp_path: Path) -> None:
+    media = tmp_path / "clip.wav"
+    media.touch()
+    backend = WhisperXBackend(
+        AsrSettings(device="cuda"),
+        api=FakeWhisperX(AlwaysOverflowModel()),
+        fallback=FallbackBackend(),
+    )
+
+    result = backend.transcribe(media, context=AsrContext("Buggy", ("Buggy",)))
+
+    assert result.words[0].text == "fallback"
 
 
 def test_whisperx_validates_device_batch_and_oom(tmp_path: Path) -> None:

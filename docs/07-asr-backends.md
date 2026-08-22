@@ -30,7 +30,8 @@ CUDA without WhisperX selects faster-whisper large-v3 instead of aborting, becau
 the OCR image is expected to run quality ASR without the WhisperX extra.
 
 WhisperX and Parakeet run in isolated Docker Compose profiles. On Windows the
-recommended path is one sequential job (`windows` runs Parakeet, then OCR):
+recommended path is one sequential job (`windows` runs Parakeet, then OCR
+with `--reuse-srt` so titles never load WhisperX):
 
 ```bash
 docker compose --profile windows up
@@ -39,6 +40,9 @@ docker compose --profile nemo run --rm parakeet
 ```
 
 WhisperX consumes profile prompts and hotwords before forced alignment.
+Those prefixes share Whisper's 448-token decoder window, so the adapter
+caps them and retries without the glossary if a segment still overflows.
+A second overflow falls back to faster-whisper for that file.
 Parakeet is English-only and CUDA-only, so it cannot run on Mac (including
 Docker Desktop). It runs decode, GPU, and SRT write as overlapping stages:
 ffmpeg decodes the next files, the model stays loaded, and cue writing does

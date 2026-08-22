@@ -30,3 +30,11 @@ def test_dockerfile_extras_layer_ignores_readme_and_src() -> None:
     assert "COPY src" not in extras
     assert "ReadMe.md" in rest
     assert "COPY src" in rest
+
+
+def test_windows_titles_reuses_parakeet_srt() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    dialogue, _, titles = compose.partition("windows-titles:")
+    assert "SUBTITLEGEN_PRESET: english-fast" in dialogue
+    assert "--reuse-srt" in titles
+    assert "--no-visual-text" in dialogue

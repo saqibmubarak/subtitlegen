@@ -128,7 +128,8 @@ Use **forward slashes** (`C:/Users/you/Videos/Dressrosa`). A backslash before
 | `SUBTITLEGEN_VISUAL_PROBE_SECONDS` | Coarse title scan | `4` |
 | `SUBTITLEGEN_VISUAL_REFINE_SECONDS` | Window around a hit | `12` |
 | `SUBTITLEGEN_ENRICH_GLOSSARY` | Wikipedia name fetch | `1` |
-| `SUBTITLEGEN_OVERWRITE` | Rebuild existing SRT | `0`, or `1` to regenerate |
+| `SUBTITLEGEN_OVERWRITE` | Rebuild existing SRT (dialogue only) | `0`, or `1` to regenerate |
+| `SUBTITLEGEN_REUSE_SRT` | Titles-only: never run ASR | `1` on `windows-titles` |
 
 Videos are always **`/data/videos` inside the container**. Do not pass
 `D:\...` as the `generate` path.
@@ -152,7 +153,7 @@ add `-d` / `--detach` — that background form is for servers that keep running.
 # First time, after src/ changes, or after changing pyproject extras
 docker compose --profile windows build
 
-# Foreground: Parakeet SRT, then OCR ASS (not `up -d`)
+# Foreground: Parakeet SRT, then OCR ASS from those SRT files (not `up -d`)
 docker compose --profile windows up
 
 # Optional: delete the stopped job containers
@@ -170,8 +171,9 @@ the next files with ffmpeg, keep the model on GPU, and write the previous SRT
 on a background thread. Windows are sent in **one batched 20 s transcribe**.
 A full-episode tensor OOMs; if a batch does, it splits and retries.
 
-Do **not** set `SUBTITLEGEN_OVERWRITE=1` on the title image. Overwrite would
-wipe the Parakeet SRT and re-transcribe with faster-whisper.
+`windows-titles` passes `--reuse-srt`, so it never loads WhisperX or Parakeet.
+It only OCRs files that already have a valid Parakeet `.srt`. Overwrite on the
+title image cannot replace that dialogue.
 
 | Profile | Command | What it does |
 |---|---|---|
@@ -251,6 +253,7 @@ subtitlegen generate PATH
     --cache-dir .subtitlegen
     --output-dir DIR          # default: beside each video
     --overwrite               # rebuild SRT (and then ASS)
+    --reuse-srt               # never ASR; titles from existing SRT only
     --profile one-piece       # else inferred from the path
     --profiles-dir DIR
     --arc Dressrosa --episode 03
