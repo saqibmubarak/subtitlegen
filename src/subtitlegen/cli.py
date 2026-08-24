@@ -13,7 +13,7 @@ import typer
 
 from subtitlegen.cues.builder import CueBuilder
 from subtitlegen.errors import SubtitleWriteError
-from subtitlegen.export.ass import AssWriter
+from subtitlegen.export.ass import AssWriter, is_valid_ass
 from subtitlegen.export.srt import SrtWriter
 from subtitlegen.logging import configure_logging
 from subtitlegen.media import discover_media, media_duration
@@ -246,33 +246,56 @@ def _enrich_profile(
     return updated
 
 
+def _keep_glossary(profile: SeriesProfile | None) -> tuple[str, ...]:
+    if profile is None:
+        return ()
+    names = {entry.canonical for entry in profile.terms}
+    names.update(alias for entry in profile.terms for alias in entry.aliases)
+    names.update(source for source, _target in profile.visual_translations)
+    names.update(target for _source, target in profile.visual_translations)
+    return tuple(sorted(name for name in names if name.strip()))
+
+
 def _visual_service(
     profile: SeriesProfile | None,
     detector_model: Path | None,
     cache_dir: Path,
     frames_per_second: float,
-    minimum_japanese_characters: int = 5,
-    probe_interval_seconds: float = 4.0,
+    minimum_japanese_characters: int = 3,
+    probe_interval_seconds: float = 3.0,
     refine_window_seconds: float = 12.0,
+    settings: VisualPipelineSettings | None = None,
+    allowed_windows: tuple[tuple[float, float], ...] | None = None,
+    apply_keep_filter: bool = True,
 ) -> MultimodalSubtitleService:
     from subtitlegen.visual.ocr import warmup_torch
 
     warmup_torch()
-    visual_settings = VisualPipelineSettings(
+    visual_settings = settings or VisualPipelineSettings(
         frames_per_second=frames_per_second,
         probe_interval_seconds=probe_interval_seconds,
         refine_window_seconds=refine_window_seconds,
         minimum_japanese_characters=minimum_japanese_characters,
     )
     disable_paddle_onednn()
-    paddle = PaddleOcrDetector()
+    from subtitlegen.visual.paddle_runtime import start_paddle_runtime
+
+    runtime = start_paddle_runtime()
+    paddle = PaddleOcrDetector(runtime=runtime)
     detector = (
         FallbackTextDetector(OpenCvDbNetDetector(detector_model), paddle)
         if detector_model is not None
         else paddle
     )
-    recognizer = PaddleTextRecognizer()
-    scanner = JapaneseCharacterScanner(paddle, recognizer)
+    recognizer = PaddleTextRecognizer(runtime=runtime)
+    scanner = JapaneseCharacterScanner(
+        paddle,
+        recognizer,
+        analysis_width=visual_settings.probe_analysis_width,
+        maximum_crops=visual_settings.probe_maximum_crops,
+        accept_tall_weak=visual_settings.probe_accept_tall_weak,
+    )
+    keep_glossary = _keep_glossary(profile)
     pipeline = VisualTextPipeline(
         AdaptiveVisualSampler(
             scanner,
@@ -282,6 +305,7 @@ def _visual_service(
             refine_interval_seconds=visual_settings.refine_interval_seconds,
             scene_threshold=visual_settings.scene_threshold,
             skip_nonref_frames=visual_settings.skip_nonref_frames,
+            allowed_windows=allowed_windows,
         ),
         detector,
         MangaOcrEngine(),
@@ -311,7 +335,10 @@ def _visual_service(
         detector_input_size=visual_settings.detector_input_size,
         minimum_japanese_characters=visual_settings.minimum_japanese_characters,
         minimum_box_area_ratio=visual_settings.minimum_box_area_ratio,
+        minimum_vertical_box_area_ratio=visual_settings.minimum_vertical_box_area_ratio,
         minimum_vertical_center_ratio=visual_settings.minimum_vertical_center_ratio,
+        keep_glossary=keep_glossary,
+        apply_keep_filter=apply_keep_filter,
     )
     detector_identity = "paddle-ppocrv5-mobile"
     if detector_model is not None:
@@ -323,7 +350,7 @@ def _visual_service(
         NllbLocalTranslator.DEFAULT_MODEL,
         profile,
         visual_settings.cache_identity(),
-        "title-scan-v8",
+        "title-scan-v10",
     )
     visual_key = "visual-" + hashlib.sha256(repr(visual_data).encode()).hexdigest()[:12]
     store = PortableJobStore(cache_dir / "jobs")
@@ -379,7 +406,7 @@ def generate(
     visual_probe_seconds: Annotated[
         float,
         typer.Option("--visual-probe-seconds", envvar="SUBTITLEGEN_VISUAL_PROBE_SECONDS"),
-    ] = 4.0,
+    ] = 3.0,
     visual_refine_seconds: Annotated[
         float,
         typer.Option("--visual-refine-seconds", envvar="SUBTITLEGEN_VISUAL_REFINE_SECONDS"),
@@ -387,7 +414,7 @@ def generate(
     visual_min_japanese_characters: Annotated[
         int,
         typer.Option("--visual-min-japanese-characters", min=1),
-    ] = 5,
+    ] = 3,
     detector_model: Annotated[Path | None, typer.Option("--detector-model")] = None,
     overwrite: Annotated[
         bool,
@@ -544,19 +571,43 @@ def generate(
         )
         try:
             prefetch = getattr(multimodal, "prefetch_probe", None)
-            videos = [video for video, _dialogue in generated]
+
+            def ass_for(video: Path, dialogue_output: Path | None) -> Path:
+                return (
+                    dialogue_output.with_suffix(".ass")
+                    if dialogue_output is not None
+                    else output_for(video).with_suffix(".ass")
+                )
+
+            needed = [
+                video
+                for video, dialogue_output in generated
+                if overwrite or not is_valid_ass(ass_for(video, dialogue_output))
+            ]
+            remaining = list(needed)
             if prefetch is not None:
-                for video in videos[:2]:
+                for video in remaining[:2]:
                     prefetch(video)
             for index, (video, dialogue_output) in enumerate(generated):
+                ass_output = ass_for(video, dialogue_output)
+                if not overwrite and is_valid_ass(ass_output):
+                    logger.info(
+                        "skipped: %s already exists; pass --overwrite to regenerate",
+                        ass_output,
+                    )
+                    continue
+                if video in remaining:
+                    remaining.remove(video)
                 if prefetch is not None:
-                    for video_ahead in videos[index + 1 : index + 3]:
+                    for video_ahead in remaining[:2]:
                         prefetch(video_ahead)
                 try:
-                    ass_output = (
-                        dialogue_output.with_suffix(".ass")
-                        if dialogue_output is not None
-                        else output_for(video).with_suffix(".ass")
+                    logger.info(
+                        "titles %d/%d %s -> %s",
+                        index + 1,
+                        len(generated),
+                        video.name,
+                        ass_output,
                     )
                     visual_result = multimodal.process(
                         video,

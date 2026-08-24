@@ -306,11 +306,11 @@ def test_visual_pipeline_japanese_character_threshold_is_configurable(
         FakeOcr("日本語字"),
         FakeTranslator(),
         VisualEventTracker(frame_interval_seconds=0.5),
-        minimum_japanese_characters=4,
+        minimum_japanese_characters=5,
     )
 
-    assert default_pipeline.process(media) == ()
-    assert len(configured_pipeline.process(media)) == 1
+    assert len(default_pipeline.process(media)) == 1
+    assert configured_pipeline.process(media) == ()
 
 
 def test_visual_pipeline_does_not_cache_perceptual_hash_collisions(
@@ -570,3 +570,40 @@ def test_visual_pipeline_redetects_new_boxes_and_prefers_paddle_for_hud(
     assert manga.calls == 0
     assert events
     assert all("工場破壊侍救出チーム" in event.source_text for event in events)
+
+
+def test_visual_pipeline_keeps_narrow_vertical_column(tmp_path: Path) -> None:
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    events = VisualTextPipeline(
+        FakeSampler(image),
+        FakeDetector((BoundingBox(100, 80, 40, 500),)),
+        FakeOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+    ).process(tmp_path / "video.mp4")
+    assert len(events) == 1
+
+
+def test_visual_pipeline_ocrs_union_when_per_box_reads_fail(tmp_path: Path) -> None:
+    image = np.zeros((40, 80, 3), dtype=np.uint8)
+
+    class SizeOcr:
+        def recognize(self, crop: Any) -> OcrResult:
+            height, width = np.asarray(crop).shape[:2]
+            if width >= 20:
+                return OcrResult("ドレスローザ王国")
+            return OcrResult("あ")
+
+    events = VisualTextPipeline(
+        FakeSampler(image),
+        FakeDetector((BoundingBox(4, 8, 12, 8), BoundingBox(20, 8, 12, 8))),
+        SizeOcr(),
+        FakeTranslator(),
+        VisualEventTracker(frame_interval_seconds=0.5),
+        minimum_box_area_ratio=0.0,
+        minimum_vertical_box_area_ratio=0.0,
+        minimum_japanese_characters=5,
+    ).process(tmp_path / "video.mp4")
+
+    assert len(events) == 1
+    assert events[0].source_text == "ドレスローザ王国"

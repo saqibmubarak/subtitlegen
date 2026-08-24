@@ -1,6 +1,9 @@
 import json
 import logging
+import os
+import time
 import wave
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +101,42 @@ def test_json_formatter_emits_structured_message() -> None:
     payload = json.loads(JsonFormatter().format(record))
     assert payload["level"] == "INFO"
     assert payload["message"] == "hello world"
+    stamp = datetime.fromisoformat(str(payload["timestamp"]))
+    assert stamp.tzinfo is not None
+
+
+def test_json_formatter_follows_tz_environment() -> None:
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Kolkata"
+    time.tzset()
+    try:
+        record = logging.LogRecord("test", logging.INFO, __file__, 1, "hello", (), None)
+        stamp = datetime.fromisoformat(str(json.loads(JsonFormatter().format(record))["timestamp"]))
+        assert stamp.utcoffset() == timedelta(hours=5, minutes=30)
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
+
+def test_configure_logging_hides_huggingface_fast_tokenizer_warning() -> None:
+    from subtitlegen.logging import configure_logging
+
+    configure_logging()
+    record = logging.LogRecord(
+        "transformers",
+        logging.WARNING,
+        __file__,
+        1,
+        "`use_fast` is set to `True` but the tokenizer class does not have a fast version.",
+        (),
+        None,
+    )
+    assert any(
+        not item.filter(record) for item in logging.getLogger("transformers").filters
+    )
 
 
 def test_cli_validate_and_generate(monkeypatch: Any, tmp_path: Path) -> None:
@@ -269,6 +308,101 @@ def test_cli_titles_only_runs_visual_without_srt(
     assert result.exit_code == 0
     assert multimodal.dialogue is None
     assert (tmp_path / "episode.ass").is_file()
+    assert multimodal.closed
+
+
+def test_cli_skips_existing_ass_unless_overwrite(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    from subtitlegen.export.ass import AssWriter
+
+    video = tmp_path / "episode.mp4"
+    video.touch()
+    video.with_suffix(".srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+        encoding="utf-8",
+    )
+    AssWriter().write([], video.with_suffix(".ass"))
+
+    class FakeMultimodal:
+        def __init__(self) -> None:
+            self.processed = 0
+
+        def process(self, *_args: Any, **_kwargs: Any) -> MultimodalResult:
+            self.processed += 1
+            return MultimodalResult(video.with_suffix(".ass"), 1, 0)
+
+        def close(self) -> None:
+            return None
+
+    multimodal = FakeMultimodal()
+    monkeypatch.setattr(
+        cli_module,
+        "_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("asr")),
+    )
+    monkeypatch.setattr(cli_module, "_visual_service", lambda *_args, **_kwargs: multimodal)
+
+    skipped = CliRunner().invoke(app, ["generate", str(video), "--reuse-srt"])
+    assert skipped.exit_code == 0
+    assert multimodal.processed == 0
+
+    overwritten = CliRunner().invoke(
+        app,
+        ["generate", str(video), "--reuse-srt", "--overwrite"],
+    )
+    assert overwritten.exit_code == 0
+    assert multimodal.processed == 1
+
+
+def test_cli_prefetch_skips_existing_ass(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    from subtitlegen.export.ass import AssWriter
+
+    first = tmp_path / "one.mp4"
+    second = tmp_path / "two.mp4"
+    first.touch()
+    second.touch()
+    AssWriter().write([], first.with_suffix(".ass"))
+
+    class FakeMultimodal:
+        def __init__(self) -> None:
+            self.prefetch_calls: list[Path] = []
+            self.processed: list[Path] = []
+            self.closed = False
+
+        def prefetch_probe(self, media_path: Path) -> None:
+            self.prefetch_calls.append(media_path)
+
+        def process(
+            self,
+            video: Path,
+            dialogue: Path | None,
+            output: Path,
+        ) -> MultimodalResult:
+            self.processed.append(video)
+            output.write_text("ASS", encoding="utf-8")
+            return MultimodalResult(output, 0, 1)
+
+        def close(self) -> None:
+            self.closed = True
+
+    multimodal = FakeMultimodal()
+    monkeypatch.setattr(
+        cli_module,
+        "_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("asr")),
+    )
+    monkeypatch.setattr(cli_module, "_visual_service", lambda *_args, **_kwargs: multimodal)
+
+    result = CliRunner().invoke(app, ["generate", str(tmp_path), "--titles-only"])
+
+    assert result.exit_code == 0
+    assert [path.name for path in multimodal.processed] == ["two.mp4"]
+    assert {path.name for path in multimodal.prefetch_calls} == {"two.mp4"}
     assert multimodal.closed
 
 
@@ -554,7 +688,7 @@ def test_visual_service_uses_fps_for_sampling_timing_and_cache(tmp_path: Path) -
     assert two_fps._visual_pipeline._sampler._refine_interval == 1.0
     assert one_fps._visual_key != two_fps._visual_key
     assert one_fps._visual_key != short_cards._visual_key
-    assert "title-scan-v8" in Path(cli_module.__file__).read_text(encoding="utf-8")
+    assert "title-scan-v10" in Path(cli_module.__file__).read_text(encoding="utf-8")
     one_fps.close()
     two_fps.close()
     short_cards.close()

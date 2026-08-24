@@ -186,7 +186,7 @@ def test_perceptual_hash_is_deterministic_and_rejects_empty_images() -> None:
 def test_visual_pipeline_settings_validate_runtime_overrides() -> None:
     settings = VisualPipelineSettings(frames_per_second=2, minimum_japanese_characters=2)
     assert settings.frame_interval_seconds == 0.5
-    assert settings.probe_interval_seconds == 4.0
+    assert settings.probe_interval_seconds == 3.0
     assert settings.refine_window_seconds == 12.0
     assert settings.refine_interval_seconds == 1.0
     assert settings.proposal_padding_ratio == pytest.approx(0.08)

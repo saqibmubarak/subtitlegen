@@ -110,6 +110,9 @@ def test_text_detection_options_disable_onednn_run_mode() -> None:
     assert options["enable_mkldnn"] is False
     assert options["unclip_ratio"] == pytest.approx(1.35)
     assert options["engine_config"]["run_mode"] == "paddle"
+    assert options["engine_config"]["device_type"] == "cpu"
+    with pytest.raises(ValueError):
+        text_detection_options(device_type="tpu")
 
 
 def test_text_recognition_options_disable_onednn_run_mode() -> None:

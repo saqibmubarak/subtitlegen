@@ -8,6 +8,10 @@ import tomllib
 from pathlib import Path
 
 
+PADDLE_CPU = "paddlepaddle==3.3.1"
+PADDLE_GPU = "paddlepaddle-gpu==3.3.1"
+
+
 def requirements_from_pyproject(pyproject: Path, extras: tuple[str, ...]) -> list[str]:
     data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     requirements = list(data["project"]["dependencies"])
@@ -17,6 +21,11 @@ def requirements_from_pyproject(pyproject: Path, extras: tuple[str, ...]) -> lis
             available = ", ".join(optional)
             raise SystemExit(f"unknown extra '{extra}'; available: {available}")
         requirements.extend(optional[extra])
+    if "cuda" in extras and "ocr" in extras:
+        requirements = [
+            PADDLE_GPU if requirement == PADDLE_CPU else requirement
+            for requirement in requirements
+        ]
     return requirements
 
 

@@ -55,6 +55,22 @@ class AssWriter:
         output_path.write_text(self.render(cues), encoding="utf-8")
 
 
+def is_valid_ass(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return False
+    if "[Script Info]" not in content or "[Events]" not in content:
+        return False
+    try:
+        parse_ass_events(content)
+    except ValueError:
+        return False
+    return True
+
+
 def parse_ass_events(content: str) -> tuple[StyledCue, ...]:
     events: list[StyledCue] = []
     for line in content.splitlines():

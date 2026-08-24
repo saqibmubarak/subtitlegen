@@ -12,6 +12,15 @@ def test_parse_extras_splits_commas_and_skips_blanks() -> None:
     assert _DEPS.parse_extras(["cuda,ocr", "dev", ""]) == ("cuda", "ocr", "dev")
 
 
+def test_cuda_ocr_swaps_cpu_paddle_for_gpu_wheel() -> None:
+    reqs = _DEPS.requirements_from_pyproject(Path("pyproject.toml"), ("cuda", "ocr"))
+    assert "paddlepaddle-gpu==3.3.1" in reqs
+    assert "paddlepaddle==3.3.1" not in reqs
+    cpu = _DEPS.requirements_from_pyproject(Path("pyproject.toml"), ("ocr",))
+    assert "paddlepaddle==3.3.1" in cpu
+    assert "paddlepaddle-gpu==3.3.1" not in cpu
+
+
 def test_requirements_include_core_and_named_extras() -> None:
     reqs = _DEPS.requirements_from_pyproject(Path("pyproject.toml"), ("nemo",))
     assert "faster-whisper==1.2.1" in reqs
@@ -38,3 +47,4 @@ def test_windows_titles_reuses_parakeet_srt() -> None:
     assert "SUBTITLEGEN_PRESET: english-fast" in dialogue
     assert "--reuse-srt" in titles
     assert "--no-visual-text" in dialogue
+    assert "TZ: ${TZ:-}" in compose

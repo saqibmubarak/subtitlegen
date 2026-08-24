@@ -278,12 +278,13 @@ class AdaptiveVisualSampler:
         scanner: JapanesePresenceScanner,
         *,
         frames_per_second: float = 1.5,
-        probe_interval_seconds: float = 4.0,
+        probe_interval_seconds: float = 3.0,
         refine_window_seconds: float = 12.0,
         refine_interval_seconds: float | None = None,
         scene_threshold: float = 0.28,
         skip_nonref_frames: bool = False,
         frame_reader: FrameReader | None = None,
+        allowed_windows: tuple[tuple[float, float], ...] | None = None,
     ) -> None:
         if probe_interval_seconds <= 0 or refine_window_seconds <= 0:
             raise ValueError("probe and refine windows must be positive")
@@ -309,6 +310,7 @@ class AdaptiveVisualSampler:
             frame_reader=frame_reader,
             skip_nonref_frames=skip_nonref_frames,
             emit_scene_images=False,
+            allowed_windows=allowed_windows,
         )
 
     def sample(self, media_path: Path) -> Iterable[SampledFrame]:

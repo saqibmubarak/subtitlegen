@@ -11,6 +11,7 @@ from subtitlegen.visual.ocr import (
     PaddleTextRecognizer,
     contains_japanese,
     has_title_script,
+    hiragana_character_count,
     japanese_character_count,
     rotate_vertical_crop,
     warmup_torch,
@@ -59,6 +60,7 @@ def test_manga_ocr_engine_and_japanese_filter_contract() -> None:
     assert result == OcrResult("日本")
     assert contains_japanese(result.text)
     assert japanese_character_count("日本, English") == 2
+    assert hiragana_character_count("そういえば") == 5
     assert not contains_japanese("English only")
     assert has_title_script("ドレスローザ")
     assert has_title_script("立場破壊を侍救出チーム")

@@ -106,6 +106,35 @@ def test_japanese_character_scanner_rotates_vertical_crops_for_horizontal_ocr() 
     assert decision.boxes == (BoundingBox(0, 0, 6, 20),)
 
 
+def test_japanese_character_scanner_inspects_vertical_before_larger_english() -> None:
+    class MixedRecognizer:
+        def recognize(self, image: Any) -> OcrResult:
+            height, width = np.asarray(image).shape[:2]
+            return OcrResult("錦えもん" if height > width else "Scene-4")
+
+    scanner = JapaneseCharacterScanner(
+        FakeDetector((BoundingBox(0, 0, 30, 8), BoundingBox(0, 10, 6, 20))),
+        MixedRecognizer(),
+        analysis_width=64,
+        maximum_crops=1,
+    )
+    decision = scanner.inspect(np.zeros((40, 40, 3), dtype=np.uint8))
+    assert decision.accepted
+    assert "錦えもん" in decision.recognized
+
+
+def test_japanese_character_scanner_accepts_tall_weak_vertical() -> None:
+    scanner = JapaneseCharacterScanner(
+        FakeDetector((BoundingBox(0, 0, 6, 20),)),
+        FakeRecognizer("あ"),
+        analysis_width=32,
+        accept_tall_weak=True,
+    )
+    decision = scanner.inspect(np.zeros((32, 32, 3), dtype=np.uint8))
+    assert decision.accepted
+    assert decision.boxes == (BoundingBox(0, 0, 6, 20),)
+
+
 def test_japanese_character_scanner_rejects_hiragana_filler() -> None:
     scanner = JapaneseCharacterScanner(
         FakeDetector((BoundingBox(0, 0, 4, 4),)),

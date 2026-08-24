@@ -30,7 +30,8 @@ live under [docs/](docs/README.md).
    (`Doflamingo`, not `Dofuramingo`).
 5. **On-screen Japanese** (default on): coarse 4 s probe for title-script
    (kanji / katakana), then 1 s refine in a ±12 s window. Paddle OCR reads HUD
-   cards; NLLB-200 translates to English. Use `--no-visual-text` to skip.
+   cards; NLLB-200 translates to English. Existing valid `.ass` files are
+   skipped unless you pass `--overwrite`. Use `--no-visual-text` to skip.
 
 `--preset` only picks the **speech** model. Visual OCR is the same on every
 preset.
@@ -117,6 +118,7 @@ Use **forward slashes** (`C:/Users/you/Videos/Dressrosa`). A backslash before
 
 | Variable | Purpose | Typical value |
 |---|---|---|
+| `TZ` | Log clock inside the container | unset (UTC), or `Asia/Kolkata` |
 | `VIDEO_HOST_PATH` | Host folder of videos (required) | `C:/Users/you/Videos/Dressrosa` |
 | `MODEL_CACHE_HOST_PATH` | Hugging Face / Paddle weights | `./model_cache` |
 | `JOB_CACHE_HOST_PATH` | Resume jobs | `./.subtitlegen-docker` |
@@ -125,12 +127,13 @@ Use **forward slashes** (`C:/Users/you/Videos/Dressrosa`). A backslash before
 | `SUBTITLEGEN_CACHE_DIR` | Cache **inside** the container | `/cache` |
 | `SUBTITLEGEN_PROFILE` | Not forwarded from `.env` (empty string would break inference). Pass a flag. | `--profile one-piece` |
 | `SUBTITLEGEN_ARC` | Same as profile | `--arc Dressrosa` |
-| `SUBTITLEGEN_VISUAL_PROBE_SECONDS` | Coarse title scan | `4` |
+| `SUBTITLEGEN_VISUAL_PROBE_SECONDS` | Coarse title scan | `3` |
 | `SUBTITLEGEN_VISUAL_REFINE_SECONDS` | Window around a hit | `12` |
 | `SUBTITLEGEN_ENRICH_GLOSSARY` | Wikipedia name fetch | `1` |
-| `SUBTITLEGEN_OVERWRITE` | Rebuild existing SRT (dialogue only) | `0`, or `1` to regenerate |
+| `SUBTITLEGEN_OVERWRITE` | Rebuild existing SRT and ASS | `0`, or `1` to regenerate |
 | `SUBTITLEGEN_REUSE_SRT` | Never ASR; require an existing SRT | `1` on `windows-titles` |
 | `SUBTITLEGEN_TITLES_ONLY` | Never ASR; OCR even without an SRT | unset, or `1` for titles only |
+| `SUBTITLEGEN_PADDLE_DEVICE` | Paddle detect/rec device | `auto` (GPU worker if `paddlepaddle-gpu` is installed), or `cpu` |
 
 Videos are always **`/data/videos` inside the container**. Do not pass
 `D:\...` as the `generate` path.
@@ -254,7 +257,7 @@ subtitlegen generate PATH
     --config config.ini
     --cache-dir .subtitlegen
     --output-dir DIR          # default: beside each video
-    --overwrite               # rebuild SRT (and then ASS)
+    --overwrite               # rebuild existing SRT and ASS
     --reuse-srt               # never ASR; require an existing SRT
     --titles-only             # never ASR; OCR even if there is no SRT
     --profile one-piece       # else inferred from the path
@@ -263,10 +266,10 @@ subtitlegen generate PATH
     --auto-profile / --no-auto-profile
     --local-correction / --no-local-correction
     --visual-text / --no-visual-text
-    --visual-probe-seconds 4
+    --visual-probe-seconds 3
     --visual-refine-seconds 12
     --visual-fps 1.5
-    --visual-min-japanese-characters 5
+    --visual-min-japanese-characters 3
     --detector-model comic-dbnet.onnx
     --verbose
 
@@ -335,23 +338,31 @@ CLI `--preset` **overrides** `model_name` from this file.
 | Artifact | Reused when |
 |---|---|
 | `.srt` | File exists and parses as valid SRT |
+| `.ass` | File exists and parses as ASS (`[Script Info]` + `[Events]`) |
 | ASR job under `--cache-dir/jobs` | Same backend + model + decode key |
-| Visual job | Same detector, OCR, NLLB, profile, and `title-scan-v8` key |
+| Visual job | Same detector, OCR, NLLB, profile, and `title-scan-v10` key |
 
-`--overwrite` rebuilds the SRT (and then the ASS). Changing the visual cache
-key (detector, glossary, scan version) rebuilds titles even if the SRT is
-kept.
+`--overwrite` rebuilds both the SRT and the ASS. Without it, titles skip a
+video that already has a valid `.ass`. Changing the visual cache key only
+matters when an ASS is missing or overwrite is set.
 
 ---
 
 ## On-screen titles (current behavior)
 
-Default **on**. Probe every 4 s for title-script; scene cuts keep a signature
-for refine but do not run OCR. Refine seeks those windows at 1 s with a fresh
-detect (boxes are not frozen). Horizontal cards: furigana mask + Paddle rec.
-Manga OCR only for tall vertical crops. Translation: profile
-`visual_translations` first, then one batched local NLLB-200 600M pass on the
-unique title strings.
+Default **on**. Probe every 3 s for title-script (and tall weak vertical
+columns). Scene cuts keep a signature for refine but do not run OCR. Refine
+seeks those windows at 1 s with a fresh detect. Narrow tate-gaki columns use a
+lower area floor than wide HUD cards. Nearby boxes on one card cluster into
+one event; if per-box OCR fails, the union crop is read once. Horizontal
+cards: furigana mask + Paddle rec. Manga OCR only for tall vertical crops.
+A keep filter then drops hiragana filler, date/HUD loanwords, and
+dialogue-like OCR dumps, and collapses duplicate crops of the same card.
+Translation: profile `visual_translations` first, then one batched local
+NLLB-200 600M pass on the unique title strings.
+
+On the Windows titles image, `cuda,ocr` installs `paddlepaddle-gpu` and Paddle
+detect/rec run in a **torch-free worker process**. Mac stays on the CPU wheel.
 
 NLLB’s license is **non-commercial** for many uses. See
 [docs/10-model-licenses.md](docs/10-model-licenses.md).

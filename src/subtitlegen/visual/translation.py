@@ -151,6 +151,7 @@ class NllbLocalTranslator:
                 tokenizer = tokenizer_class.from_pretrained(
                     model_name,
                     src_lang="jpn_Jpan",
+                    use_fast=False,
                 )
                 model = model_class.from_pretrained(model_name)
                 if device != "cpu":

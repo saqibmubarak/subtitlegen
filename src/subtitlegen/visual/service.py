@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from subtitlegen.validation import is_valid_srt, parse_srt
 from subtitlegen.visual.merger import SubtitleMerger
 from subtitlegen.visual.models import BoundingBox, VisualEvent
 from subtitlegen.visual.pipeline import VisualTextPipeline
+from subtitlegen.visual.score import dump_events_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ class MultimodalSubtitleService:
             else []
         )
         visual = self._load_or_run_visual(media_path)
+        dump_events_jsonl(output_path.with_suffix(".titles.jsonl"), visual)
         self._log_and_preview_titles(media_path, visual, output_path)
         merged = self._merger.merge(dialogue, list(visual))
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,6 +94,7 @@ class MultimodalSubtitleService:
         output_path: Path,
     ) -> None:
         preview_dir = output_path.with_name(f"{output_path.stem}.visual-qa")
+        jobs: list[tuple[VisualEvent, Path, float]] = []
         for index, event in enumerate(events, start=1):
             midpoint = (event.start + event.end) / 2
             logger.info(
@@ -104,11 +108,20 @@ class MultimodalSubtitleService:
                 f"{index:03d}_{format_timecode(midpoint).replace(':', '-')}_"
                 f"{_preview_slug(event.translated_text)}.jpg"
             )
+            jobs.append((event, preview, midpoint))
+        if not jobs:
+            return
+
+        def extract(job: tuple[VisualEvent, Path, float]) -> None:
+            _event, preview, midpoint = job
             try:
                 extract_video_frame(media_path, midpoint, preview)
                 logger.info("title screenshot %s", preview)
             except (OSError, RuntimeError, ValueError, ImportError) as error:
                 logger.warning("title screenshot failed at %s: %s", preview, error)
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(extract, jobs))
 
     def _load_or_run_visual(self, media_path: Path) -> tuple[VisualEvent, ...]:
         if self._store is None or self._executor is None:

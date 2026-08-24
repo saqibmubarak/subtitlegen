@@ -4,15 +4,19 @@ from dataclasses import astuple, dataclass
 @dataclass(frozen=True, slots=True)
 class VisualPipelineSettings:
     frames_per_second: float = 1.5
-    probe_interval_seconds: float = 4.0
+    probe_interval_seconds: float = 3.0
     refine_window_seconds: float = 12.0
     refine_interval_seconds: float = 1.0
     skip_nonref_frames: bool = False
     scene_threshold: float = 0.28
     minimum_box_area_ratio: float = 0.01
+    minimum_vertical_box_area_ratio: float = 0.0015
     minimum_vertical_center_ratio: float = 0.0
     detector_input_size: int = 416
-    minimum_japanese_characters: int = 5
+    minimum_japanese_characters: int = 3
+    probe_analysis_width: int = 1280
+    probe_maximum_crops: int = 32
+    probe_accept_tall_weak: bool = True
     proposal_difference_threshold: int = 24
     proposal_minimum_area_ratio: float = 0.001
     proposal_maximum_area_ratio: float = 0.35
@@ -22,7 +26,7 @@ class VisualPipelineSettings:
     proposal_analysis_width: int = 320
     proposal_maximum_regions: int = 2
     tracker_max_gap_seconds: float = 1.5
-    tracker_minimum_observations: int = 2
+    tracker_minimum_observations: int = 1
     tracker_box_iou_threshold: float = 0.25
     tracker_text_similarity_threshold: float = 0.65
     tracker_hash_distance_threshold: int = 8

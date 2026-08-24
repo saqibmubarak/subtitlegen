@@ -37,7 +37,9 @@ def disable_paddle_onednn() -> None:
             return
 
 
-def text_detection_options() -> dict[str, Any]:
+def text_detection_options(*, device_type: str = "cpu") -> dict[str, Any]:
+    if device_type not in {"cpu", "gpu"}:
+        raise ValueError("Paddle device type must be cpu or gpu")
     return {
         "model_name": "PP-OCRv5_mobile_det",
         "thresh": 0.3,
@@ -46,20 +48,22 @@ def text_detection_options() -> dict[str, Any]:
         "enable_mkldnn": False,
         "engine": "paddle_static",
         "engine_config": {
-            "device_type": "cpu",
+            "device_type": device_type,
             "run_mode": "paddle",
             "enable_new_ir": False,
         },
     }
 
 
-def text_recognition_options() -> dict[str, Any]:
+def text_recognition_options(*, device_type: str = "cpu") -> dict[str, Any]:
+    if device_type not in {"cpu", "gpu"}:
+        raise ValueError("Paddle device type must be cpu or gpu")
     return {
         "model_name": "PP-OCRv5_mobile_rec",
         "enable_mkldnn": False,
         "engine": "paddle_static",
         "engine_config": {
-            "device_type": "cpu",
+            "device_type": device_type,
             "run_mode": "paddle",
             "enable_new_ir": False,
         },
@@ -149,11 +153,19 @@ class OpenCvDbNetDetector:
 
 
 class PaddleOcrDetector:
-    def __init__(self, *, engine_factory: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        engine_factory: Callable[[], Any] | None = None,
+        runtime: Any | None = None,
+    ) -> None:
         self._engine_factory = engine_factory
+        self._runtime = runtime
         self._engine: Any | None = None
 
     def detect(self, image: Any) -> tuple[BoundingBox, ...]:
+        if self._runtime is not None:
+            return tuple(self._runtime.detect(image))
         engine = self._load_engine()
         if hasattr(engine, "predict"):
             try:
@@ -168,6 +180,8 @@ class PaddleOcrDetector:
         return self._boxes(regions or (), confidences)
 
     def detect_batch(self, images: Sequence[Any]) -> tuple[tuple[BoundingBox, ...], ...]:
+        if self._runtime is not None:
+            return tuple(self._runtime.detect_batch(images))
         engine = self._load_engine()
         if not hasattr(engine, "predict"):
             return tuple(self.detect(image) for image in images)
@@ -201,6 +215,9 @@ class PaddleOcrDetector:
         return tuple(box for box in boxes if box is not None)
 
     def close(self) -> None:
+        close = getattr(self._runtime, "close", None)
+        if close is not None:
+            close()
         self._engine = None
 
     def _load_engine(self) -> Any:

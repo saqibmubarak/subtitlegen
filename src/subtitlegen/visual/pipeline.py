@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -24,9 +25,11 @@ from subtitlegen.visual.ocr import (
 from subtitlegen.visual.proposals import RegionProposer
 from subtitlegen.visual.sampler import FrameSource
 from subtitlegen.visual.tracker import VisualEventTracker, perceptual_hash
+from subtitlegen.visual.keep import keep_visual_events
 from subtitlegen.visual.translation import Translator
 
 logger = logging.getLogger(__name__)
+_PREP_WORKERS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +63,19 @@ class VisualTextPipeline:
         region_proposer: RegionProposer | None = None,
         crop_padding_ratio: float = 0.0,
         minimum_box_area_ratio: float = 0.01,
+        minimum_vertical_box_area_ratio: float = 0.0015,
         minimum_vertical_center_ratio: float = 0.0,
         detector_input_size: int = 416,
-        minimum_japanese_characters: int = 5,
+        minimum_japanese_characters: int = 3,
+        keep_glossary: tuple[str, ...] = (),
+        apply_keep_filter: bool = True,
     ) -> None:
         if not 0 <= crop_padding_ratio <= 0.5:
             raise ValueError("crop padding ratio must be within [0, 0.5]")
         if not 0 <= minimum_box_area_ratio <= 1:
             raise ValueError("minimum box area ratio must be within [0, 1]")
+        if not 0 <= minimum_vertical_box_area_ratio <= 1:
+            raise ValueError("minimum vertical box area ratio must be within [0, 1]")
         if not 0 <= minimum_vertical_center_ratio <= 1:
             raise ValueError("minimum vertical center ratio must be within [0, 1]")
         if detector_input_size < 32:
@@ -83,9 +91,12 @@ class VisualTextPipeline:
         self._region_proposer = region_proposer
         self._crop_padding_ratio = crop_padding_ratio
         self._minimum_box_area_ratio = minimum_box_area_ratio
+        self._minimum_vertical_box_area_ratio = minimum_vertical_box_area_ratio
         self._minimum_vertical_center_ratio = minimum_vertical_center_ratio
         self._detector_input_size = detector_input_size
         self._minimum_japanese_characters = minimum_japanese_characters
+        self._keep_glossary = keep_glossary
+        self._apply_keep_filter = apply_keep_filter
 
     def process(self, media_path: Path) -> tuple[VisualEvent, ...]:
         warmup = getattr(self._ocr, "warmup", None)
@@ -127,8 +138,16 @@ class VisualTextPipeline:
                     if decision.accepted:
                         hits.append((frame.timestamp, decision.boxes))
 
+            logger.info("title-scan probe %s", media_path.name)
             infer.run(iter_probe(media_path), inspect_probe, batch_size=batch_size)
             windows = windows_from_hits(hits)
+            logger.info(
+                "title-scan refine %s probes=%d hits=%d windows=%d",
+                media_path.name,
+                getattr(self._sampler, "probe_count", 0),
+                len(hits),
+                len(windows),
+            )
             sampled = (
                 infer.run(
                     iter_refine(media_path, windows),
@@ -145,6 +164,8 @@ class VisualTextPipeline:
                 batch_size=batch_size,
             )
         events = self._apply_translations(self._tracker.track(observations))
+        if self._apply_keep_filter:
+            events = keep_visual_events(events, glossary=self._keep_glossary)
         logger.info(
             "title-scan-summary probes=%s hits=%s windows=%s refine_frames=%d "
             "observations=%d events=%d in %s",
@@ -336,26 +357,12 @@ class VisualTextPipeline:
                 list[_RememberedText],
             ] = {}
             for cluster in self._cluster_boxes(kept):
+                prepared_items = self._prepare_cluster_crops(image, cluster)
                 recognized: list[tuple[BoundingBox, str, str, int, tuple[int, ...]]] = []
-                for box in self._reading_order(cluster):
-                    crop = self._crop(
-                        image,
-                        box.x,
-                        box.y,
-                        box.width,
-                        box.height,
-                        padding_ratio=self._crop_padding_ratio,
-                    )
-                    if crop.size == 0:
-                        logger.debug(
-                            "title-ocr %s t=%.3f box=%s decision=empty_crop",
-                            format_timecode(frame.timestamp),
-                            frame.timestamp,
-                            self._box_label(box),
-                        )
-                        continue
-                    image_hash = perceptual_hash(crop)
-                    signature = self._visual_signature(crop)
+                for prepared in prepared_items:
+                    box = prepared["box"]
+                    image_hash = prepared["image_hash"]
+                    signature = prepared["signature"]
                     memory_key = self._region_key(box)
                     remembered_text = hint_memory.get(memory_key)
                     if (
@@ -385,10 +392,14 @@ class VisualTextPipeline:
                             )
                         )
                         continue
-                    fingerprint = self._fingerprint(crop)
+                    fingerprint = prepared["fingerprint"]
                     cached = cache.get(fingerprint)
                     if cached is None:
-                        source_text, engine = self._recognize_title_crop(crop, box)
+                        source_text, engine = self._recognize_prepared(
+                            prepared["prepared"],
+                            prepared["line_image"],
+                            box,
+                        )
                         japanese_count = japanese_character_count(source_text)
                         if not self._usable_title(source_text):
                             hint_memory.pop(memory_key, None)
@@ -445,7 +456,35 @@ class VisualTextPipeline:
                         )
                     )
                 if not recognized:
-                    continue
+                    union = self._union_boxes(cluster)
+                    fallback = self._prepare_cluster_item(image, union)
+                    if fallback is None:
+                        continue
+                    source_text, engine = self._recognize_prepared(
+                        fallback["prepared"],
+                        fallback["line_image"],
+                        union,
+                    )
+                    if not self._usable_title(source_text):
+                        logger.debug(
+                            "title-ocr %s t=%.3f box=%s decision=union_drop engine=%s text=%r",
+                            format_timecode(frame.timestamp),
+                            frame.timestamp,
+                            self._box_label(union),
+                            engine,
+                            source_text,
+                        )
+                        continue
+                    recognized.append(
+                        (
+                            union,
+                            source_text,
+                            source_text,
+                            fallback["image_hash"],
+                            fallback["signature"],
+                        )
+                    )
+                    cache[fallback["fingerprint"]] = (source_text, source_text)
                 box = self._union_boxes(tuple(item[0] for item in recognized))
                 source_text = " ".join(item[1] for item in recognized)
                 translated_text = " ".join(item[2] for item in recognized)
@@ -486,14 +525,65 @@ class VisualTextPipeline:
                 }
             )
 
+    def _prepare_cluster_crops(
+        self,
+        image: np.ndarray[Any, Any],
+        cluster: tuple[BoundingBox, ...],
+    ) -> list[dict[str, Any]]:
+        boxes = self._reading_order(cluster)
+
+        def prepare(box: BoundingBox) -> dict[str, Any] | None:
+            return self._prepare_cluster_item(image, box)
+
+        if len(boxes) == 1:
+            item = prepare(boxes[0])
+            return [] if item is None else [item]
+        with ThreadPoolExecutor(max_workers=_PREP_WORKERS) as pool:
+            return [item for item in pool.map(prepare, boxes) if item is not None]
+
+    def _prepare_cluster_item(
+        self,
+        image: np.ndarray[Any, Any],
+        box: BoundingBox,
+    ) -> dict[str, Any] | None:
+        crop = self._crop(
+            image,
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+            padding_ratio=self._crop_padding_ratio,
+        )
+        if crop.size == 0:
+            return None
+        prepared = mask_furigana(crop, vertical=box.is_vertical())
+        line_image = rotate_vertical_crop(prepared) if box.is_vertical() else prepared
+        return {
+            "box": box,
+            "crop": crop,
+            "prepared": prepared,
+            "line_image": line_image,
+            "image_hash": perceptual_hash(crop),
+            "signature": self._visual_signature(crop),
+            "fingerprint": self._fingerprint(crop),
+        }
+
     def _recognize_title_crop(
         self,
         crop: np.ndarray[Any, Any],
         box: BoundingBox,
     ) -> tuple[str, str]:
         prepared = mask_furigana(crop, vertical=box.is_vertical())
+        line_image = rotate_vertical_crop(prepared) if box.is_vertical() else prepared
+        return self._recognize_prepared(prepared, line_image, box)
+
+    def _recognize_prepared(
+        self,
+        prepared: np.ndarray[Any, Any],
+        line_image: np.ndarray[Any, Any],
+        box: BoundingBox,
+    ) -> tuple[str, str]:
         if self._line_ocr is not None:
-            line_image = rotate_vertical_crop(prepared) if box.is_vertical() else prepared
             line_text = self._line_ocr.recognize(line_image).text.strip()
             if self._usable_title(line_text) or not box.is_vertical():
                 return line_text, "paddle"
@@ -689,6 +779,9 @@ class VisualTextPipeline:
         frame_height: int,
     ) -> tuple[tuple[BoundingBox, ...], tuple[tuple[BoundingBox, str], ...]]:
         minimum_area = frame_width * frame_height * self._minimum_box_area_ratio
+        minimum_vertical_area = (
+            frame_width * frame_height * self._minimum_vertical_box_area_ratio
+        )
         minimum_center = frame_height * self._minimum_vertical_center_ratio
         primary = set(self._primary_boxes(boxes))
         kept: list[BoundingBox] = []
@@ -697,7 +790,8 @@ class VisualTextPipeline:
             if box not in primary:
                 dropped.append((box, "nested"))
                 continue
-            if box.area < minimum_area:
+            floor = minimum_vertical_area if box.is_vertical() else minimum_area
+            if box.area < floor:
                 dropped.append((box, "too_small"))
                 continue
             if box.y + box.height / 2 < minimum_center:
@@ -756,6 +850,8 @@ class VisualTextPipeline:
 
     @staticmethod
     def _nearby(left: BoundingBox, right: BoundingBox, padding_ratio: float = 0.25) -> bool:
+        if left.is_vertical() and right.is_vertical():
+            padding_ratio = 0.4
         pad_x = max(8, round(max(left.width, right.width) * padding_ratio))
         pad_y = max(8, round(max(left.height, right.height) * padding_ratio))
         expanded = BoundingBox(

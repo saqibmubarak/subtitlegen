@@ -35,8 +35,9 @@ class JapaneseCharacterScanner:
         detector: TextDetector,
         recognizer: OcrEngine,
         *,
-        analysis_width: int = 480,
-        maximum_crops: int = 16,
+        analysis_width: int = 960,
+        maximum_crops: int = 24,
+        accept_tall_weak: bool = True,
         downscale: Callable[[Any, int], Any] | None = None,
     ) -> None:
         if analysis_width < 32:
@@ -47,6 +48,7 @@ class JapaneseCharacterScanner:
         self._recognizer = recognizer
         self._analysis_width = analysis_width
         self._maximum_crops = maximum_crops
+        self._accept_tall_weak = accept_tall_weak
         self._downscale = downscale
 
     def contains_japanese(self, image: Any) -> bool:
@@ -61,8 +63,7 @@ class JapaneseCharacterScanner:
         boxes = tuple(self._detector.detect(prepared))
         if not boxes:
             return PresenceDecision(False, "no_boxes", 0, ())
-        ranked = sorted(boxes, key=lambda item: item.area, reverse=True)
-        inspected = ranked[: self._maximum_crops]
+        inspected = self._inspect_order(boxes)
         recognized: list[str] = []
         orientations: list[str] = []
         hit_boxes: list[BoundingBox] = []
@@ -76,13 +77,17 @@ class JapaneseCharacterScanner:
             text, orientation = self._recognize(crop, box)
             recognized.append(text)
             orientations.append(orientation)
+            mapped = self._original_box(box, scale, frame_width, frame_height)
             if has_title_script(text):
-                mapped = self._original_box(box, scale, frame_width, frame_height)
                 if mapped is not None:
                     hit_boxes.append(mapped)
+            elif box.is_vertical() and self._accept_tall_weak and mapped is not None:
+                if contains_japanese(text) or orientation.startswith("vertical"):
+                    hit_boxes.append(mapped)
+                    weak = True
             elif contains_japanese(text):
                 weak = True
-        skipped = max(0, len(ranked) - len(inspected))
+        skipped = max(0, len(boxes) - len(inspected))
         if hit_boxes:
             return PresenceDecision(
                 True,
@@ -101,6 +106,20 @@ class JapaneseCharacterScanner:
             skipped_crops=skipped,
             orientations=tuple(orientations),
         )
+
+    def _inspect_order(self, boxes: tuple[BoundingBox, ...]) -> tuple[BoundingBox, ...]:
+        ranked = sorted(boxes, key=lambda item: item.area, reverse=True)
+        ordered: list[BoundingBox] = []
+        seen: set[int] = set()
+        for box in [item for item in ranked if item.is_vertical()] + ranked:
+            marker = id(box)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            ordered.append(box)
+            if len(ordered) >= self._maximum_crops:
+                break
+        return tuple(ordered)
 
     def _recognize(self, crop: np.ndarray[Any, Any], box: BoundingBox) -> tuple[str, str]:
         text = self._recognizer.recognize(crop).text.strip()

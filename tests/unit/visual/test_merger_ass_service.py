@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from subtitlegen.domain.models import Cue
-from subtitlegen.export.ass import AssWriter, parse_ass_events
+from subtitlegen.export.ass import AssWriter, is_valid_ass, parse_ass_events
 from subtitlegen.export.srt import SrtWriter
 from subtitlegen.runtime.executor import StageExecutor
 from subtitlegen.runtime.jobs import PortableJobStore
@@ -48,6 +48,14 @@ def test_ass_writer_matches_golden_and_round_trips(tmp_path: Path) -> None:
     assert parse_ass_events(writer.render(escaped)) == tuple(escaped)
     with pytest.raises(ValueError):
         parse_ass_events("Dialogue: malformed")
+    assert is_valid_ass(output)
+    empty = tmp_path / "empty.ass"
+    empty.touch()
+    assert not is_valid_ass(empty)
+    assert not is_valid_ass(tmp_path / "missing.ass")
+    junk = tmp_path / "junk.ass"
+    junk.write_text("not ass", encoding="utf-8")
+    assert not is_valid_ass(junk)
 
 
 class FakeVisualPipeline:
@@ -77,6 +85,7 @@ def test_multimodal_service_writes_atomic_ass_and_releases_models(tmp_path: Path
     assert result.dialogue_cues == 1
     assert result.visual_events == 1
     assert parse_ass_events(output.read_text(encoding="utf-8"))[1].style == "OnScreen"
+    assert output.with_suffix(".titles.jsonl").is_file()
     assert not list(tmp_path.glob("*.tmp"))
     service.close()
     assert visual.closed

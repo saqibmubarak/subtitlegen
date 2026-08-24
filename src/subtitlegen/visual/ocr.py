@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -23,6 +24,7 @@ def warmup_torch() -> None:
     torch.zeros(1)
 
 JAPANESE_PATTERN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]")
+HIRAGANA_PATTERN = re.compile(r"[\u3040-\u309f]")
 KANJI_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 KATAKANA_PATTERN = re.compile(r"[\u30a0-\u30ff]")
 
@@ -46,6 +48,10 @@ def rotate_vertical_crop(image: Any) -> Any:
 
 def japanese_character_count(text: str) -> int:
     return len(JAPANESE_PATTERN.findall(text))
+
+
+def hiragana_character_count(text: str) -> int:
+    return len(HIRAGANA_PATTERN.findall(text))
 
 
 def kanji_character_count(text: str) -> int:
@@ -78,19 +84,30 @@ def has_title_script(
 class PaddleTextRecognizer:
     """Fast mobile recognizer used to decide whether a frame has Japanese text."""
 
-    def __init__(self, *, engine_factory: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        engine_factory: Callable[[], Any] | None = None,
+        runtime: Any | None = None,
+    ) -> None:
         self._engine_factory = engine_factory
+        self._runtime = runtime
         self._engine: Any | None = None
 
     def recognize(self, image: Any) -> OcrResult:
+        if self._runtime is not None:
+            return OcrResult(str(self._runtime.recognize(image)))
         engine = self._load_engine()
         payload = self._predict(engine, np.asarray(image))
         return OcrResult(self._text_from_payload(payload))
 
     def close(self) -> None:
-        close = getattr(self._engine, "close", None)
+        close = getattr(self._runtime, "close", None)
         if close is not None:
             close()
+        engine_close = getattr(self._engine, "close", None)
+        if engine_close is not None:
+            engine_close()
         self._engine = None
 
     def _predict(self, engine: Any, image: Any) -> Any:
@@ -199,7 +216,12 @@ class MangaOcrEngine:
                     "manga-ocr is unavailable; install subtitlegen[ocr]"
                 ) from error
             factory = MangaOcr
-        self._model = factory()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*use_fast.*fast version.*",
+            )
+            self._model = factory()
         return self._model
 
     def _prepare_image(self, image: Any) -> Any:
