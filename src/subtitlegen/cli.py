@@ -418,7 +418,7 @@ def generate(
     detector_model: Annotated[Path | None, typer.Option("--detector-model")] = None,
     overwrite: Annotated[
         bool,
-        typer.Option("--overwrite", envvar="SUBTITLEGEN_OVERWRITE"),
+        typer.Option("--overwrite/--no-overwrite", envvar="SUBTITLEGEN_OVERWRITE"),
     ] = False,
     reuse_srt: Annotated[
         bool,
@@ -560,70 +560,72 @@ def generate(
                 close()
 
     if use_visual:
-        multimodal = _visual_service(
-            series_profile,
-            detector_model,
-            cache_dir,
-            visual_fps,
-            visual_min_japanese_characters,
-            visual_probe_seconds,
-            visual_refine_seconds,
-        )
-        try:
-            prefetch = getattr(multimodal, "prefetch_probe", None)
+        def ass_for(video: Path, dialogue_output: Path | None) -> Path:
+            return (
+                dialogue_output.with_suffix(".ass")
+                if dialogue_output is not None
+                else output_for(video).with_suffix(".ass")
+            )
 
-            def ass_for(video: Path, dialogue_output: Path | None) -> Path:
-                return (
-                    dialogue_output.with_suffix(".ass")
-                    if dialogue_output is not None
-                    else output_for(video).with_suffix(".ass")
-                )
-
-            needed = [
-                video
-                for video, dialogue_output in generated
-                if overwrite or not is_valid_ass(ass_for(video, dialogue_output))
-            ]
-            remaining = list(needed)
-            if prefetch is not None:
-                for video in remaining[:2]:
-                    prefetch(video)
-            for index, (video, dialogue_output) in enumerate(generated):
-                ass_output = ass_for(video, dialogue_output)
-                if not overwrite and is_valid_ass(ass_output):
-                    logger.info(
-                        "skipped: %s already exists; pass --overwrite to regenerate",
-                        ass_output,
-                    )
-                    continue
-                if video in remaining:
-                    remaining.remove(video)
+        needed = [
+            video
+            for video, dialogue_output in generated
+            if overwrite or not is_valid_ass(ass_for(video, dialogue_output))
+        ]
+        for video, dialogue_output in generated:
+            if video in needed:
+                continue
+            logger.info(
+                "skipped: %s already exists; pass --overwrite to regenerate",
+                ass_for(video, dialogue_output),
+            )
+        if needed:
+            multimodal = _visual_service(
+                series_profile,
+                detector_model,
+                cache_dir,
+                visual_fps,
+                visual_min_japanese_characters,
+                visual_probe_seconds,
+                visual_refine_seconds,
+            )
+            try:
+                prefetch = getattr(multimodal, "prefetch_probe", None)
+                remaining = list(needed)
                 if prefetch is not None:
-                    for video_ahead in remaining[:2]:
-                        prefetch(video_ahead)
-                try:
-                    logger.info(
-                        "titles %d/%d %s -> %s",
-                        index + 1,
-                        len(generated),
-                        video.name,
-                        ass_output,
-                    )
-                    visual_result = multimodal.process(
-                        video,
-                        dialogue_output,
-                        ass_output,
-                    )
-                    logger.info(
-                        "generated: %s with %d visual events",
-                        visual_result.output_path,
-                        visual_result.visual_events,
-                    )
-                except Exception:
-                    failures += 1
-                    logger.exception("visual text failed: %s", video)
-        finally:
-            multimodal.close()
+                    for video in remaining[:2]:
+                        prefetch(video)
+                for index, (video, dialogue_output) in enumerate(generated):
+                    if video not in remaining:
+                        continue
+                    remaining.remove(video)
+                    if prefetch is not None:
+                        for video_ahead in remaining[:2]:
+                            prefetch(video_ahead)
+                    ass_output = ass_for(video, dialogue_output)
+                    try:
+                        logger.info(
+                            "titles %d/%d %s -> %s",
+                            index + 1,
+                            len(generated),
+                            video.name,
+                            ass_output,
+                        )
+                        visual_result = multimodal.process(
+                            video,
+                            dialogue_output,
+                            ass_output,
+                        )
+                        logger.info(
+                            "generated: %s with %d visual events",
+                            visual_result.output_path,
+                            visual_result.visual_events,
+                        )
+                    except Exception:
+                        failures += 1
+                        logger.exception("visual text failed: %s", video)
+            finally:
+                multimodal.close()
     if failures:
         raise typer.Exit(code=1)
 

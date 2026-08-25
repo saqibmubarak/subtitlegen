@@ -343,8 +343,8 @@ CLI `--preset` **overrides** `model_name` from this file.
 | Visual job | Same detector, OCR, NLLB, profile, and `title-scan-v10` key |
 
 `--overwrite` rebuilds both the SRT and the ASS. Without it, titles skip a
-video that already has a valid `.ass`. Changing the visual cache key only
-matters when an ASS is missing or overwrite is set.
+video that already has a valid `.ass` and do not load OCR models. Changing
+the visual cache key only matters when an ASS is missing or overwrite is set.
 
 ---
 

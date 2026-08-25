@@ -56,6 +56,9 @@ def test_ass_writer_matches_golden_and_round_trips(tmp_path: Path) -> None:
     junk = tmp_path / "junk.ass"
     junk.write_text("not ass", encoding="utf-8")
     assert not is_valid_ass(junk)
+    messy = tmp_path / "messy.ass"
+    messy.write_text("[Script Info]\n\n[Events]\nDialogue: malformed\n", encoding="utf-8")
+    assert is_valid_ass(messy)
 
 
 class FakeVisualPipeline:

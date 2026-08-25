@@ -58,17 +58,21 @@ class AssWriter:
 def is_valid_ass(path: Path) -> bool:
     if not path.is_file() or path.stat().st_size == 0:
         return False
-    try:
-        content = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    content = _read_ass_text(path)
+    if content is None:
         return False
-    if "[Script Info]" not in content or "[Events]" not in content:
-        return False
-    try:
-        parse_ass_events(content)
-    except ValueError:
-        return False
-    return True
+    return "[Events]" in content or "Dialogue:" in content
+
+
+def _read_ass_text(path: Path) -> str | None:
+    for encoding in ("utf-8-sig", "utf-8", "utf-16"):
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeError:
+            continue
+        except OSError:
+            return None
+    return None
 
 
 def parse_ass_events(content: str) -> tuple[StyledCue, ...]:

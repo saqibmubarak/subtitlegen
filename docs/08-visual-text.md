@@ -64,10 +64,10 @@ local caches afterward.
 
 The combined ASS contains separate `Dialogue` and `OnScreen` styles. The SRT is
 kept as a dialogue-only compatibility output. A later run skips a video that
-already has a valid `.ass` unless you pass `--overwrite`. Visual events are
-also cached in the portable job store and are regenerated when detector,
-profile, or sampling settings change and the ASS is missing or overwrite is
-set.
+already has a valid `.ass` unless you pass `--overwrite`, and does not start
+Paddle or NLLB when every file already has one. Visual events are also cached
+in the portable job store and are regenerated when detector, profile, or
+sampling settings change and the ASS is missing or overwrite is set.
 
 Install the optional dependencies with:
 

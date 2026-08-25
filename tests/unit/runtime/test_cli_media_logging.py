@@ -337,16 +337,32 @@ def test_cli_skips_existing_ass_unless_overwrite(
             return None
 
     multimodal = FakeMultimodal()
+    starts: list[int] = []
+
+    def fake_visual(*_args: Any, **_kwargs: Any) -> FakeMultimodal:
+        starts.append(1)
+        return multimodal
+
     monkeypatch.setattr(
         cli_module,
         "_service",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("asr")),
     )
-    monkeypatch.setattr(cli_module, "_visual_service", lambda *_args, **_kwargs: multimodal)
+    monkeypatch.setattr(cli_module, "_visual_service", fake_visual)
 
     skipped = CliRunner().invoke(app, ["generate", str(video), "--reuse-srt"])
     assert skipped.exit_code == 0
     assert multimodal.processed == 0
+    assert starts == []
+
+    env_skip = CliRunner().invoke(
+        app,
+        ["generate", str(video), "--reuse-srt"],
+        env={"SUBTITLEGEN_OVERWRITE": "0"},
+    )
+    assert env_skip.exit_code == 0
+    assert multimodal.processed == 0
+    assert starts == []
 
     overwritten = CliRunner().invoke(
         app,
@@ -354,6 +370,7 @@ def test_cli_skips_existing_ass_unless_overwrite(
     )
     assert overwritten.exit_code == 0
     assert multimodal.processed == 1
+    assert starts == [1]
 
 
 def test_cli_prefetch_skips_existing_ass(
