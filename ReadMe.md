@@ -361,8 +361,9 @@ dialogue-like OCR dumps, and collapses duplicate crops of the same card.
 Translation: profile `visual_translations` first, then one batched local
 NLLB-200 600M pass on the unique title strings.
 
-On the Windows titles image, `cuda,ocr` installs `paddlepaddle-gpu` and Paddle
-detect/rec run in a **torch-free worker process**. Mac stays on the CPU wheel.
+On the Windows titles image, `cuda,ocr` installs `paddlepaddle-gpu==3.3.1` from
+Paddle's CUDA 12.9 index (that wheel is not on PyPI) and Paddle detect/rec run
+in a **torch-free worker process**. Mac stays on the CPU wheel.
 
 NLLB’s license is **non-commercial** for many uses. See
 [docs/10-model-licenses.md](docs/10-model-licenses.md).

@@ -38,7 +38,8 @@ windows from `SUBTITLEGEN_VISUAL_PROBE_SECONDS` and
 
 Paddle detect/rec run in a separate process when `paddlepaddle-gpu` is
 installed (`SUBTITLEGEN_PADDLE_DEVICE=auto` on the Windows `cuda,ocr` image).
-The parent process keeps Manga OCR and NLLB on PyTorch/CUDA. Set
+The GPU 3.3.1 wheel is pulled from Paddle's CUDA 12.9 index, not PyPI. The
+parent process keeps Manga OCR and NLLB on PyTorch/CUDA. Set
 `SUBTITLEGEN_PADDLE_DEVICE=cpu` to force the in-process CPU wheel.
 
 Pass `--detector-model comic-dbnet.onnx` to try an anime/comic DBNet model with

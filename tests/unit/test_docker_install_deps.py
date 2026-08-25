@@ -19,6 +19,18 @@ def test_cuda_ocr_swaps_cpu_paddle_for_gpu_wheel() -> None:
     cpu = _DEPS.requirements_from_pyproject(Path("pyproject.toml"), ("ocr",))
     assert "paddlepaddle==3.3.1" in cpu
     assert "paddlepaddle-gpu==3.3.1" not in cpu
+    gpu_commands = _DEPS.pip_install_commands(reqs)
+    assert len(gpu_commands) == 2
+    assert "paddlepaddle-gpu==3.3.1" not in gpu_commands[0]
+    assert gpu_commands[1][-3:] == [
+        "paddlepaddle-gpu==3.3.1",
+        "-i",
+        _DEPS.PADDLE_GPU_INDEX,
+    ]
+    assert "cu129" in _DEPS.PADDLE_GPU_INDEX
+    cpu_commands = _DEPS.pip_install_commands(cpu)
+    assert len(cpu_commands) == 1
+    assert "-i" not in cpu_commands[0]
 
 
 def test_requirements_include_core_and_named_extras() -> None:
